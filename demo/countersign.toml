@@ -1,0 +1,16 @@
+# The demo gate. This tree exists to contain planted defects; its expected
+# verdict is NOT COUNTERSIGNED, and the root claims.toml asserts exactly
+# that. If this run ever passes, the demo (or the engine) broke.
+
+[scan]
+paths = ["."]
+
+[claims]
+file = "claims.toml"
+
+[receipts]
+dir = ".countersign"
+
+[run]
+timeout_s = 60
+max_output_bytes = 20000

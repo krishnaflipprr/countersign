@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "countersign"
+version = "0.1.0"
+description = "Your agent signs. Countersign proves it. Deterministic verification of agent completion claims, with tamper-evident receipts."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Krishna" }]
+keywords = ["ai-agents", "verification", "ci", "developer-tools", "evidence"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.scripts]
+countersign = "countersign.cli:main"
+
+[tool.setuptools]
+packages = ["countersign"]

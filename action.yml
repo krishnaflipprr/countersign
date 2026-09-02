@@ -1,0 +1,53 @@
+name: "Countersign"
+description: "Your agent signs. Countersign proves it. Deterministic verification of agent completion claims: marker scan plus falsifiable-claims gate, tamper-evident receipts."
+branding:
+  icon: "verified"
+  color: "green"
+
+inputs:
+  config:
+    description: "Path to countersign.toml"
+    required: false
+    default: "countersign.toml"
+  fail-on:
+    description: "fail makes the workflow fail when the run is not countersigned; warn records the verdict without failing"
+    required: false
+    default: "fail"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install Countersign
+      shell: bash
+      run: pip install "${{ github.action_path }}"
+
+    - name: Verify
+      id: countersign
+      shell: bash
+      run: |
+        set +e
+        countersign verify --config "${{ inputs.config }}" \
+          --summary-file "$RUNNER_TEMP/countersign-summary.md"
+        status=$?
+        set -e
+        cat "$RUNNER_TEMP/countersign-summary.md" >> "$GITHUB_STEP_SUMMARY" || true
+        if [ "$status" -ne 0 ] && [ "${{ inputs.fail-on }}" != "warn" ]; then
+          exit "$status"
+        fi
+        if [ "$status" -ne 0 ]; then
+          echo "::warning::Countersign verdict: NOT COUNTERSIGNED (fail-on=warn, workflow continues)"
+        fi
+
+    - name: Upload receipts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: countersign-receipts
+        path: .countersign/
+        if-no-files-found: ignore
+        retention-days: 90

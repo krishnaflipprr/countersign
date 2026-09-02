@@ -1,0 +1,32 @@
+# What is true about this repository, each claim paired with the command
+# that fails if the claim is false.
+
+[[claim]]
+id = "unit-tests-pass"
+statement = "The full unit test suite passes"
+command = "python3 -m unittest discover -s tests -t ."
+expect = "exit 0"
+
+[[claim]]
+id = "cli-boots"
+statement = "The CLI reports its version"
+command = "python3 -m countersign --version"
+expect = "exit 0"
+
+[[claim]]
+id = "self-scan-clean"
+statement = "The engine's own source contains no marker findings"
+command = "python3 -m countersign verify --json --no-claims --no-pack | python3 -c \"import json,sys; r=json.load(sys.stdin); sys.exit(0 if r['scan']['findings']==0 else 1)\""
+expect = "exit 0"
+
+[[claim]]
+id = "demo-gets-caught"
+statement = "The demo tree, which contains planted defects, fails its own gate"
+command = "python3 -m countersign verify --config demo/countersign.toml --no-pack"
+expect = "nonzero exit"
+
+[[claim]]
+id = "register-tamper-detected"
+statement = "A tampered register is detected by the chain check"
+command = "python3 tests/tamper_check.py"
+expect = "exit 0"

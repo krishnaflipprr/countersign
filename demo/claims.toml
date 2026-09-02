@@ -1,0 +1,14 @@
+# What the demo claims about itself. One claim is true, one is false; the
+# false one is the point.
+
+[[claim]]
+id = "demo-tests-pass"
+statement = "The demo unit tests pass"
+command = "python3 -m unittest discover -s . -p 'test_*.py'"
+expect = "exit 0"
+
+[[claim]]
+id = "no-unfinished-markers"
+statement = "No unfinished-work markers in the demo source"
+command = "grep -rE '\\b(TODO|FIXME|XXX|HACK)\\b' --include='*.py' . | wc -l | grep -qx 0"
+expect = "exit 0"
