@@ -16,8 +16,8 @@ expect = "exit 0"
 
 [[claim]]
 id = "self-scan-clean"
-statement = "The engine's own source has no marker findings and uses exactly the five line exemptions its rule table needs"
-command = "python3 -m countersign verify --json --no-claims --no-pack | python3 -c \"import json,sys; r=json.load(sys.stdin); sys.exit(0 if r['scan']['findings']==0 and r['scan']['exemptions']==5 else 1)\""
+statement = "The engine's own source has no marker findings and uses exactly the four line exemptions its rule table needs"
+command = "python3 -m countersign verify --json --no-claims --no-pack | python3 -c \"import json,sys; r=json.load(sys.stdin); sys.exit(0 if r['scan']['findings']==0 and r['scan']['exemptions']==4 else 1)\""
 expect = "exit 0"
 
 [[claim]]

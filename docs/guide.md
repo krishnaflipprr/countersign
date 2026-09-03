@@ -37,6 +37,13 @@ expect = "exit 0"
 
 Three expectations exist: `exit 0` (the default), `nonzero exit` (for negative tests, "this must fail"), and `output contains` with a `needle`. Commands run through your shell, from the repository root, with your privileges. Review changes to `claims.toml` the way you review changes to CI configuration.
 
+Then narrow `paths` in `countersign.toml` to production source. The marker rules were tuned on a tree whose gate covered `src/`, the dashboard and the clients, not seed scripts, migrations or docs: a seed script that says "sample data" is describing demo data, not faking a query.
+
+```toml
+[scan]
+paths = ["src", "dashboard/src"]
+```
+
 ## 3. Verify
 
 `countersign verify` runs the marker scan and every claim, appends everything to the register, and writes a receipt and an evidence pack. On the shop repository the agent left a TODO, a fake price and an empty function, and the tests fail:

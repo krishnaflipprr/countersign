@@ -72,6 +72,34 @@ EXEMPT_DEF_PY = "def hook():  # countersign: exempt\n    pass\n"
 
 STALE_EXEMPT_PY = "def fine():\n    return 1  # countersign: exempt\n"
 
+EXPLAINED_PY = (
+    "def close(self):\n"
+    '    """Nothing to tear down; the client is stateless."""\n'
+    "\n\n"
+    "def downgrade():\n"
+    "    # Postgres has no DROP VALUE; done by hand if ever needed.\n"
+    "    pass\n"
+    "\n\n"
+    "def noop():\n"
+    "    pass  # intentionally does nothing\n"
+    "\n\n"
+    "def bare():\n"
+    "    pass\n"
+    "\n\n"
+    "def bare_ellipsis():\n"
+    "    ...\n"
+)
+
+EXCEPT_PY = (
+    "try:\n"
+    "    loop.add_signal_handler(sig, stop.set)\n"
+    "except NotImplementedError:\n"
+    "    pass\n"
+    "\n\n"
+    "def send():\n"
+    "    raise NotImplementedError\n"
+)
+
 
 class TestStubScan(unittest.TestCase):
     def setUp(self):
@@ -170,6 +198,14 @@ class TestStubScan(unittest.TestCase):
         self.assertEqual(findings, [])
         self.assertEqual(exemptions, 1)
         self.assertEqual(inert, 0)
+
+    def test_explained_empty_bodies_are_decisions_not_stubs(self):
+        findings, _exemptions, _inert, _files = self._scan_single("explained.py", EXPLAINED_PY)
+        self.assertEqual([(f.line, f.rule_id) for f in findings], [(14, "empty-body"), (18, "empty-body")])
+
+    def test_catching_not_implemented_error_is_not_raising_it(self):
+        findings, _exemptions, _inert, _files = self._scan_single("signals.py", EXCEPT_PY)
+        self.assertEqual([(f.line, f.rule_id) for f in findings], [(8, "not-implemented-error")])
 
     def test_marker_that_suppresses_nothing_is_reported_as_inert_not_used(self):
         findings, exemptions, inert, _files = self._scan_single("stale.py", STALE_EXEMPT_PY)

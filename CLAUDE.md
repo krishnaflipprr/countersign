@@ -17,9 +17,9 @@ HTML evidence packs, and reproduce. Plus a GitHub Action wrapper.
 
 1. **This repo passes its own gate.** `countersign verify` at the root must
    exit 0. The engine's own pattern table legitimately carries line
-   exemptions on the five rule lines whose own pattern matches them (a rule
+   exemptions on the four rule lines whose own pattern matches them (a rule
    whose regex uses alternation does not match its own source and needs no
-   marker); those five are counted on every receipt, pinned by a claim in
+   marker); those four are counted on every receipt, pinned by a claim in
    claims.toml, and must never be used anywhere else. A new exemption
    anywhere else in `countersign/` is a finding to justify in conversation,
    not a habit. Two further lines (the marker's definition in config.py and

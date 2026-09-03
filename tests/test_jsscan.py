@@ -8,8 +8,7 @@ FLAGGED = {
     "async function declaration": ("async function syncLedger() {\n}\n", [(1, "syncLedger")]),
     "generator declaration": ("function* pages() { }\n", [(1, "pages")]),
     "default export function": ("export default function () {}\n", [(1, "default")]),
-    "body holding only a comment": ("function reconcile(a, b) {\n  // fill in once the ledger API lands\n}\n", [(1, "reconcile")]),
-    "body holding only a block comment": ("function reconcile() { /* later */ }\n", [(1, "reconcile")]),
+    "body with whitespace only": ("function reconcile(a, b) {\n\n}\n", [(1, "reconcile")]),
     "class method": ("class Billing {\n  charge(amount: number): Promise<void> {}\n}\n", [(2, "charge")]),
     "async class method": ("class Billing {\n  async refund(id: string) {\n  }\n}\n", [(2, "refund")]),
     "public static method": ("class Billing {\n  public static fromConfig(cfg: Config): Billing {}\n}\n", [(2, "fromConfig")]),
@@ -23,6 +22,8 @@ FLAGGED = {
 }
 
 NOT_FLAGGED = {
+    "documented no-op with a line comment": "function reconcile(a, b) {\n  // nothing to reconcile: the ledger is append-only\n}\n",
+    "documented no-op with a block comment": "class A {\n  onClose() { /* intentionally empty */ }\n}\n",
     "constructor with parameter properties": "class Api {\n  constructor(private readonly http: HttpClient) {}\n}\n",
     "angular lifecycle hook": "class Page implements OnInit {\n  ngOnInit(): void {}\n}\n",
     "control flow blocks": "function f(x) {\n  if (x) {}\n  for (const y of x) {}\n  while (x) {}\n  switch (x) {}\n  try {} catch (e) {}\n  do {} while (x);\n  return x;\n}\n",

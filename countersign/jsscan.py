@@ -12,9 +12,10 @@ an agent leaves behind when it declares a function and never writes it:
   name(...) {}                     class and object literal methods
   export const name = (...) => {}  exported arrow and function expressions
 
-Only a body that is empty after blanking counts, so a body holding nothing
-but a comment counts too (and its comment is usually a marker finding as
-well). The check is tuned to never fire on honest code:
+Only a body that is empty before blanking counts: a block holding nothing
+but a comment is a documented no-op, which is a decision, not unfinished
+work (and whatever the comment admits is the marker rules' business). The check is
+tuned to never fire on honest code:
 
 - constructors are skipped (parameter properties make an empty body normal),
 - Angular lifecycle hooks (``ngOnInit`` and friends) are skipped,
@@ -277,8 +278,9 @@ def _block_at(text: str, i: int) -> tuple[int, int] | None:
     return i, close
 
 
-def _is_empty_block(text: str, open_brace: int, close_brace: int) -> bool:
-    return text[open_brace + 1:close_brace].strip() == ""
+def _is_unexplained_empty_block(original: str, masked: str, open_brace: int, close_brace: int) -> bool:
+    """Empty in the source itself, not merely empty once comments are blanked."""
+    return masked[open_brace + 1:close_brace].strip() == "" and original[open_brace + 1:close_brace].strip() == ""
 
 
 def _line_of(text: str, index: int) -> int:
@@ -289,7 +291,8 @@ def empty_functions(source: str) -> list[tuple[int, str]]:
     """(line, name) for every function whose body does nothing."""
     if any(len(line) > MINIFIED_LINE_LENGTH for line in source.split("\n")):
         return []
-    text = mask_source(source.replace("\r\n", "\n").replace("\r", "\n"))
+    original = source.replace("\r\n", "\n").replace("\r", "\n")
+    text = mask_source(original)
     found: dict[int, tuple[int, str]] = {}
 
     for match in _FUNCTION_DECL.finditer(text):
@@ -297,7 +300,7 @@ def empty_functions(source: str) -> list[tuple[int, str]]:
         if name is None:
             continue
         body = _body_after_signature(text, match.end())
-        if body and _is_empty_block(text, *body):
+        if body and _is_unexplained_empty_block(original, text, *body):
             found.setdefault(body[0], (_line_of(text, match.start()), name))
 
     for match in _METHOD_LINE.finditer(text):
@@ -305,7 +308,7 @@ def empty_functions(source: str) -> list[tuple[int, str]]:
         if name in NOT_A_METHOD or FRAMEWORK_HOOK.match(name):
             continue
         body = _body_after_signature(text, match.end())
-        if body and _is_empty_block(text, *body):
+        if body and _is_unexplained_empty_block(original, text, *body):
             found.setdefault(body[0], (_line_of(text, match.start(2)), name))
 
     for match in _EXPORTED_ARROW.finditer(text):
@@ -313,7 +316,7 @@ def empty_functions(source: str) -> list[tuple[int, str]]:
         if NOOP_NAME.match(name):
             continue
         body = _arrow_body(text, match.end())
-        if body and _is_empty_block(text, *body):
+        if body and _is_unexplained_empty_block(original, text, *body):
             found.setdefault(body[0], (_line_of(text, match.start()), name))
 
     return sorted(found.values())

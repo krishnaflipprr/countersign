@@ -11,13 +11,14 @@ Two layers:
 
 1. Marker rules (all languages in scope): regex over each line, ported from
    the proven gate.
-2. Structural rules: functions whose body is nothing are reported even when
-   no marker comment advertises them. Python is checked through the ast
-   module (a bare ``pass`` or ``...``; overloads, abstract methods and
-   Protocol methods are the legitimate empty bodies and are excluded).
-   TypeScript and JavaScript are checked by ``jsscan``, a comment-and-string
-   aware scan for declarations, methods and exported arrow functions with an
-   empty block.
+2. Structural rules: functions whose body does nothing and says nothing
+   about why. A bare ``pass``, ``...`` or ``{}`` is unfinished work; the
+   same body with a docstring or a comment is a documented decision (an
+   Alembic downgrade that cannot be undone, a ``close()`` with nothing to
+   close, a click group) and is not reported. Whatever the explanation
+   admits is caught by the marker rules. Python is checked through the ast
+   module (overloads, abstract methods and Protocol methods excluded);
+   TypeScript and JavaScript by ``jsscan``.
 
 Exemptions are in the file itself: append the exemption marker to a line
 that is a genuine false positive (a UI label, a vendor capability note).
@@ -64,7 +65,7 @@ def _rule(rule_id: str, source: str, flags: int, why: str) -> Rule:
 RULES: list[Rule] = [
     _rule("unfinished-marker", r"\b(TODO|FIXME|XXX|HACK)\b", 0, "unfinished-work marker; finish the work or record the question where the team keeps them"),  # countersign: exempt
     _rule("not-implemented", r"not (yet implemented|implemented yet)", re.IGNORECASE, "the code declares itself unimplemented"),
-    _rule("not-implemented-error", r"NotImplementedError", re.IGNORECASE, "raises instead of doing the work"),  # countersign: exempt
+    _rule("not-implemented-error", r"\b(raise|throw)\s+(new\s+)?NotImplemented(Error|Exception)\b", 0, "raises instead of doing the work"),
     _rule("deferred-implementation", r"implemented (later|in a future)", re.IGNORECASE, "defers the implementation"),
     _rule("stub-word", r"\bstub(bed)?\b", re.IGNORECASE, "unfinished stand-in code"),  # countersign: exempt
     _rule("fabricated-data", r"(fake|dummy|mock|sample|placeholder|hardcoded|hard-coded) (data|value|values|response|result|results|payload)", re.IGNORECASE, "fabricated values standing in for a real query or API call"),
@@ -116,14 +117,34 @@ def _inside_protocol(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
     return False
 
 
-def _python_empty_functions(source: str) -> list[tuple[int, str]]:
-    """Line numbers of functions whose body does nothing, with their names.
+def _explained(lines: list[str], def_line: int, end_line: int, exempt_marker: str) -> bool:
+    """True when a comment with words in it sits anywhere from the ``def``
+    line to the end of the body. Only called for bodies that are nothing
+    but ``pass`` or ``...``, so a ``#`` in that range is a comment (or, on
+    the def line, a ``#`` inside a default value, which errs towards not
+    reporting). A comment that is only the exemption marker explains
+    nothing; it is counted as an exemption instead.
+    """
+    for index in range(max(def_line, 1) - 1, min(end_line, len(lines))):
+        line = lines[index]
+        if "#" not in line:
+            continue
+        comment = line[line.index("#"):].replace(exempt_marker, "")
+        if comment.strip("# \t"):
+            return True
+    return False
 
-    A docstring alone does not count as doing something. Overloads,
-    abstract methods and Protocol methods are the legitimate empty body and
-    are not reported.
+
+def _python_empty_functions(source: str, exempt_marker: str = "") -> list[tuple[int, str]]:
+    """Line numbers of functions whose body does nothing and explains nothing.
+
+    A docstring or a comment inside the body makes it a documented no-op,
+    which is a decision, not unfinished work. The exemption marker alone is
+    not an explanation. Overloads, abstract methods and Protocol methods are
+    the legitimate empty body and are not reported.
     """
     tree = ast.parse(source)
+    lines = _LINE_BREAK.split(source)
     parents: dict[ast.AST, ast.AST] = {}
     for parent in ast.walk(tree):
         for child in ast.iter_child_nodes(parent):
@@ -139,9 +160,11 @@ def _python_empty_functions(source: str) -> list[tuple[int, str]]:
             continue
         body = list(node.body)
         if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
-            body = body[1:]
+            continue  # a docstring is the author's explanation of the empty body
         if not body:
             reported.append((node.lineno, node.name))
+            continue
+        if _explained(lines, node.lineno, node.end_lineno or body[-1].lineno, exempt_marker):
             continue
         does_something = False
         for statement in body:
@@ -190,7 +213,7 @@ def scan_file(config: Config, relative: str, absolute: Path) -> tuple[list[Findi
     empty: list[tuple[int, str]] = []
     if absolute.suffix == ".py":
         try:
-            empty = _python_empty_functions(text)
+            empty = _python_empty_functions(text, config.exempt_marker)
         except (SyntaxError, ValueError):
             # SyntaxError covers broken code; ValueError is what Python 3.11
             # raises for a null byte in the source, which 3.12+ reports as a

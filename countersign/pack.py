@@ -122,7 +122,7 @@ def build_pack(result: GateResult, path: Path) -> Path:
             </tr>"""
         for rule in RULES
     ) + """
-        <tr><td class="mono">empty-body</td><td>functions whose body does nothing (structural: Python via ast, TypeScript and JavaScript via a comment-and-string-aware scan)</td>
+        <tr><td class="mono">empty-body</td><td>functions whose body does nothing and explains nothing: a bare pass, ellipsis or empty braces with no docstring or comment (structural: Python via ast, TypeScript and JavaScript via a comment-and-string-aware scan)</td>
             <td class="mono">{}</td></tr>
         <tr><td class="mono">unparseable</td><td>Python files the parser rejects (Python, structural)</td>
             <td class="mono">{}</td></tr>
