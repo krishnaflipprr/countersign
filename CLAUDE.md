@@ -74,11 +74,14 @@ end to end, no markers, and it runs.
 - Package name on PyPI: `countersign-cli` (the bare name is taken). The
   import package and the command stay `countersign`.
 - Repository stays private until the hosted service is ready.
+- Hosted at github.com/krishnaflipprr/countersign (decided 2026-09-03 after
+  the gaigenticai account's Actions were found locked by a stale 2025
+  billing block). The gaigenticai copies are being deleted by Krishna.
 
 ## Releasing
 
 The workflow that `countersign init` writes points customers at
-`gaigenticai/countersign@v0.1` (constant `ACTION_REF` in starter.py). Tags:
+`krishnaflipprr/countersign@v0.1` (constant `ACTION_REF` in starter.py). Tags:
 `v0.1.0` is fixed; `v0.1` moves to the latest 0.1.x. A release is: bump
 `__version__` and pyproject, tag `v0.1.N`, move `v0.1`, push both. The
 action must never point at a tag that does not exist.

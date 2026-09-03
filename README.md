@@ -100,7 +100,7 @@ Requires Python 3.11+. Zero dependencies, standard library only, on purpose: it 
 When the repository's origin is on github.com, `countersign init` also writes `.github/workflows/countersign.yml`. Commit it and push; from then on every push to the default branch and every pull request runs Countersign, and pull requests get the claims diff against their base branch. The file it writes is this:
 
 ```yaml
-- uses: gaigenticai/countersign@v0.1
+- uses: krishnaflipprr/countersign@v0.1
   with:
     config: countersign.toml
 ```

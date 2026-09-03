@@ -118,7 +118,7 @@ If the files changed, you are told which. If the findings differ, you are told w
 If the repository's origin is on github.com, `countersign init` already wrote `.github/workflows/countersign.yml` for you (it says so in its output; `--no-github` skips it, `--github` insists). Commit and push it. Otherwise, add this step to a workflow of your own:
 
 ```yaml
-- uses: gaigenticai/countersign@v0.1
+- uses: krishnaflipprr/countersign@v0.1
   with:
     config: countersign.toml      # default
     fail-on: fail                 # or warn: record the verdict without failing
