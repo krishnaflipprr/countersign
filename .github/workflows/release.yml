@@ -1,0 +1,64 @@
+# audited on 20260903
+# Release: a pushed tag v0.1.N builds the sdist and wheel, checks that the tag
+# matches the package version, and publishes to PyPI through a trusted
+# publisher (OpenID Connect; no API token exists anywhere). The publish job
+# runs in the "pypi" environment so it can carry a required reviewer later.
+name: release
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: unit tests and the gate on the release commit
+        run: |
+          python -m unittest discover -s tests -t .
+          python -m countersign verify --no-color --no-pack
+      - name: tag must equal the package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          version="$(python -c 'import countersign; print(countersign.__version__)')"
+          if [ "$tag" != "$version" ]; then
+            echo "tag v$tag does not match countersign.__version__ $version"
+            exit 1
+          fi
+      - name: build sdist and wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/countersign-cli/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -76,15 +76,20 @@ end to end, no markers, and it runs.
 - Repository stays private until the hosted service is ready.
 - Hosted at github.com/krishnaflipprr/countersign (decided 2026-09-03 after
   the gaigenticai account's Actions were found locked by a stale 2025
-  billing block). The gaigenticai copies are being deleted by Krishna.
+  billing block). The gaigenticai copies were deleted on 2026-09-03.
 
 ## Releasing
 
 The workflow that `countersign init` writes points customers at
 `krishnaflipprr/countersign@v0.1` (constant `ACTION_REF` in starter.py). Tags:
-`v0.1.0` is fixed; `v0.1` moves to the latest 0.1.x. A release is: bump
-`__version__` and pyproject, tag `v0.1.N`, move `v0.1`, push both. The
-action must never point at a tag that does not exist.
+`v0.1.N` are fixed; `v0.1` moves to the latest 0.1.x. A release is: bump
+`__version__` and pyproject, tag `v0.1.N`, move `v0.1`, push both. Pushing
+the `v0.1.N` tag runs `.github/workflows/release.yml`, which tests, gates,
+builds, checks tag equals version, and publishes `countersign-cli` to PyPI
+through the trusted publisher (repository krishnaflipprr/countersign,
+workflow release.yml, environment pypi). A PyPI version can never be
+re-uploaded, so a broken release means a new patch number, never a force.
+The action must never point at a tag that does not exist.
 
 ## Open decisions (Krishna's call)
 
