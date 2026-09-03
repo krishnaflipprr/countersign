@@ -5,4 +5,4 @@ The agent signs (claims the work is done). Countersign only countersigns
 after the claim survived deterministic checks it can re-run later.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"

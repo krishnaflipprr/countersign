@@ -79,7 +79,7 @@ jobs:
     name: countersign verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: {ACTION_REF}
         with:
           config: {json.dumps(config_path_in_repo)}
