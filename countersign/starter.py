@@ -12,10 +12,78 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 TESTS_PASS = "tests-pass"
+
+# Where customers' workflows point. Moves only with a release; the tag it
+# names must exist on that repository before this constant changes.
+ACTION_REF = "gaigenticai/countersign@v0.1"
+WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "countersign.yml"
+
+
+@dataclass(frozen=True)
+class GitHubRepository:
+    toplevel: Path
+    default_branch: str
+
+
+def _git(root: Path, *args: str) -> str | None:
+    try:
+        completed = subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def detect_github_repository(root: Path) -> GitHubRepository | None:
+    """The repository around ``root`` when its origin is on github.com.
+
+    Nothing is guessed: no git, no origin, or an origin elsewhere means None.
+    The default branch comes from origin's HEAD when the clone knows it,
+    else from the current branch, else ``main``.
+    """
+    toplevel = _git(root, "rev-parse", "--show-toplevel")
+    if not toplevel:
+        return None
+    origin = _git(root, "remote", "get-url", "origin")
+    if not origin or "github.com" not in origin:
+        return None
+    head = _git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if head and head.startswith("origin/"):
+        branch = head[len("origin/"):]
+    else:
+        branch = _git(root, "branch", "--show-current") or "main"
+    return GitHubRepository(Path(toplevel).resolve(), branch or "main")
+
+
+def render_workflow(config_path_in_repo: str, default_branch: str) -> str:
+    return f"""# Countersign: verifies every push to {default_branch} and every pull request.
+# Written by `countersign init`. Safe to edit; the action's inputs are
+# documented at https://github.com/{ACTION_REF.split('@')[0]}.
+name: countersign
+on:
+  push:
+    branches: [{json.dumps(default_branch)}]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  countersign:
+    name: countersign verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: {ACTION_REF}
+        with:
+          config: {json.dumps(config_path_in_repo)}
+"""
 
 
 @dataclass(frozen=True)

@@ -97,13 +97,15 @@ Requires Python 3.11+. Zero dependencies, standard library only, on purpose: it 
 
 ## CI usage (GitHub Actions)
 
+When the repository's origin is on github.com, `countersign init` also writes `.github/workflows/countersign.yml`. Commit it and push; from then on every push to the default branch and every pull request runs Countersign, and pull requests get the claims diff against their base branch. The file it writes is this:
+
 ```yaml
 - uses: gaigenticai/countersign@v0.1
   with:
     config: countersign.toml
 ```
 
-The action runs Countersign straight from its checkout (no pip install, nothing fetched from PyPI). The verdict lands in the job step summary; receipts upload as artifacts. Set `fail-on: warn` to record without failing. If your config moves the receipts directory, set `receipts-dir` to match.
+The action runs Countersign straight from its checkout (no pip install, nothing fetched from PyPI). The verdict lands in the job step summary; receipts upload as artifacts. Set `fail-on: warn` to record without failing. If your config moves the receipts directory, set `receipts-dir` to match. Workflows run on the account that owns the repository, on its Actions minutes.
 
 ## What Countersign is not
 

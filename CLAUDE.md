@@ -75,6 +75,14 @@ end to end, no markers, and it runs.
   import package and the command stay `countersign`.
 - Repository stays private until the hosted service is ready.
 
+## Releasing
+
+The workflow that `countersign init` writes points customers at
+`gaigenticai/countersign@v0.1` (constant `ACTION_REF` in starter.py). Tags:
+`v0.1.0` is fixed; `v0.1` moves to the latest 0.1.x. A release is: bump
+`__version__` and pyproject, tag `v0.1.N`, move `v0.1`, push both. The
+action must never point at a tag that does not exist.
+
 ## Open decisions (Krishna's call)
 
 - Pricing shape of the hosted receipts service; nothing here depends on it.

@@ -3,7 +3,7 @@
 
 Five verbs, no config ceremony to start:
 
-  countersign init                    write countersign.toml and a starter claims.toml
+  countersign init                    write countersign.toml, a starter claims.toml and, on GitHub, the workflow
   countersign verify                  run the gate, write receipt + pack
   countersign check                   verify the evidence register's chain
   countersign reproduce --run ID      re-derive a recorded run
@@ -32,7 +32,7 @@ from .receipt import markdown_summary, receipt_json, terminal_summary, write_rec
 from .claimsdiff import diff_against_ref
 from .register import Register, RegisterDamaged
 from .reproduce import reproduce_run
-from .starter import detect_starter_claims, render_claims_toml
+from .starter import WORKFLOW_RELATIVE_PATH, detect_github_repository, detect_starter_claims, render_claims_toml, render_workflow
 
 EXIT_OK = 0
 EXIT_FAIL = 1
@@ -122,8 +122,41 @@ def _cmd_init(args: argparse.Namespace) -> int:
         print("  no build files recognised; claims.toml holds a commented example to edit")
     if required:
         print(f"  required in countersign.toml: {', '.join(required)}")
+
+    workflow_status = _write_workflow(root, target, args)
+    if workflow_status is not None:
+        return workflow_status
     print("next: review claims.toml, then run: countersign verify")
     return EXIT_OK
+
+
+def _write_workflow(root: Path, config_target: Path, args: argparse.Namespace) -> int | None:
+    """Write the GitHub Actions workflow when the repository lives on GitHub.
+
+    Returns an exit code to stop with, or None to carry on. Written by
+    default when origin is on github.com; ``--github`` insists (and is a
+    usage error when there is no GitHub repository to write into);
+    ``--no-github`` skips.
+    """
+    if args.no_github:
+        return None
+    repository = detect_github_repository(root)
+    if repository is None:
+        if args.github:
+            print("cannot write a workflow: this directory is not inside a git repository whose origin is on github.com", file=sys.stderr)
+            return EXIT_USAGE
+        print("  no GitHub origin found; no workflow written (run again with --github once the repository is on GitHub)")
+        return None
+    workflow_path = repository.toplevel / WORKFLOW_RELATIVE_PATH
+    if workflow_path.exists() and not args.force:
+        print(f"kept existing {workflow_path}")
+        return None
+    config_in_repo = config_target.resolve().relative_to(repository.toplevel).as_posix()
+    workflow_path.parent.mkdir(parents=True, exist_ok=True)
+    workflow_path.write_text(render_workflow(config_in_repo, repository.default_branch), encoding="utf-8")
+    print(f"wrote {workflow_path}")
+    print(f"  runs countersign verify on every push to {repository.default_branch} and every pull request; commit it and push")
+    return None
 
 
 def _use_color(args: argparse.Namespace) -> bool:
@@ -271,7 +304,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_init = sub.add_parser("init", help="write a countersign.toml for this repository")
     p_init.add_argument("--config", default="countersign.toml", help="config path (default: countersign.toml)")
-    p_init.add_argument("--force", action="store_true", help="overwrite an existing config")
+    p_init.add_argument("--force", action="store_true", help="overwrite an existing config (and workflow)")
+    p_init.add_argument("--github", action="store_true", help="insist on writing the GitHub Actions workflow; an error when no GitHub repository is found")
+    p_init.add_argument("--no-github", action="store_true", help="do not write a GitHub Actions workflow even when origin is on github.com")
     p_init.set_defaults(func=_cmd_init)
 
     p_verify = sub.add_parser("verify", help="run the gate; write receipt, pack and register entries")
