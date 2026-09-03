@@ -1,3 +1,4 @@
+# audited on 20260903
 # What is true about this repository, each claim paired with the command
 # that fails if the claim is false.
 
@@ -15,8 +16,8 @@ expect = "exit 0"
 
 [[claim]]
 id = "self-scan-clean"
-statement = "The engine's own source contains no marker findings"
-command = "python3 -m countersign verify --json --no-claims --no-pack | python3 -c \"import json,sys; r=json.load(sys.stdin); sys.exit(0 if r['scan']['findings']==0 else 1)\""
+statement = "The engine's own source has no marker findings and uses exactly the five line exemptions its rule table needs"
+command = "python3 -m countersign verify --json --no-claims --no-pack | python3 -c \"import json,sys; r=json.load(sys.stdin); sys.exit(0 if r['scan']['findings']==0 and r['scan']['exemptions']==5 else 1)\""
 expect = "exit 0"
 
 [[claim]]
@@ -29,4 +30,10 @@ expect = "nonzero exit"
 id = "register-tamper-detected"
 statement = "A tampered register is detected by the chain check"
 command = "python3 tests/tamper_check.py"
+expect = "exit 0"
+
+[[claim]]
+id = "register-chain-intact"
+statement = "This repository's own evidence register verifies end to end"
+command = "python3 -m countersign check"
 expect = "exit 0"

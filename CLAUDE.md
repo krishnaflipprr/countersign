@@ -1,3 +1,4 @@
+<!-- audited on 20260903 -->
 # Countersign: working rules
 
 Countersign is a product, not a project. It is the productized form of the
@@ -16,10 +17,14 @@ HTML evidence packs, and reproduce. Plus a GitHub Action wrapper.
 
 1. **This repo passes its own gate.** `countersign verify` at the root must
    exit 0. The engine's own pattern table legitimately carries line
-   exemptions (the rules contain the words they match); those exemptions are
-   counted on every receipt and must never be used anywhere else. A new
-   exemption anywhere else in `countersign/` is a finding to justify in
-   conversation, not a habit.
+   exemptions on the five rule lines whose own pattern matches them (a rule
+   whose regex uses alternation does not match its own source and needs no
+   marker); those five are counted on every receipt, pinned by a claim in
+   claims.toml, and must never be used anywhere else. A new exemption
+   anywhere else in `countersign/` is a finding to justify in conversation,
+   not a habit. Two further lines (the marker's definition in config.py and
+   the init template in cli.py) contain the marker text without exempting
+   anything; receipts report them as inert.
 2. **No dependencies. Ever.** Standard library only. A dependency is a
    supply-chain conversation with a locked-down customer.
 3. **No model judgement in any verdict.** Deterministic checks only. A

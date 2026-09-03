@@ -1,3 +1,4 @@
+# audited on 20260903
 # Countersign's own gate. This repository eats its own cooking: the receipt
 # you get from running `countersign verify` here is produced by the same
 # engine it ships.
@@ -8,10 +9,10 @@
 # config (demo/countersign.toml) with an expected-failure claim.
 paths = ["countersign"]
 ignore_dirs = [
-  ".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
-  ".pytest_cache", ".ruff_cache", "dist", "build", "target", ".next", ".nuxt",
-  ".wrangler", ".cache", ".countersign", "coverage", ".tox", ".idea",
-  ".vscode", "vendor",
+  ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
+  ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build", "target",
+  ".next", ".nuxt", ".wrangler", ".cache", ".countersign", "coverage", ".tox",
+  ".idea", ".vscode", "vendor",
 ]
 extensions = [
   ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".rs", ".rb",

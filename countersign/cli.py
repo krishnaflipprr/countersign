@@ -1,3 +1,4 @@
+# audited on 20260903
 """The command line.
 
 Four verbs, no config ceremony to start:
@@ -8,19 +9,22 @@ Four verbs, no config ceremony to start:
   countersign reproduce --run ID      re-derive a recorded run
 
 Exit codes: 0 clean or reproduced, 1 the work did not pass (or the register
-is damaged, or the run did not reproduce), 2 usage error. A CI system can
+is damaged, or the run did not reproduce), 2 usage error (including a config
+or claims file that cannot be honoured), 130 interrupted. A CI system can
 trust the exit code; a human should read the receipt.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
 
 from . import __version__
-from .config import Config
+from .claims import ClaimsError
+from .config import Config, ConfigError
 from .engine import FAIL_VERDICT, run_gate
 from .pack import build_pack
 from .receipt import markdown_summary, receipt_json, terminal_summary, write_receipt
@@ -30,6 +34,7 @@ from .reproduce import reproduce_run
 EXIT_OK = 0
 EXIT_FAIL = 1
 EXIT_USAGE = 2
+EXIT_INTERRUPTED = 130
 
 DEFAULT_CONFIG_TEMPLATE = """\
 # Countersign: deterministic verification of agent completion claims.
@@ -37,15 +42,16 @@ DEFAULT_CONFIG_TEMPLATE = """\
 
 [scan]
 # Which paths to scan for unfinished-work markers. Relative to this file.
+# A path that does not exist is an error, not an empty scan.
 paths = ["."]
 # Directories never scanned. The defaults cover build output and vendored
 # dependencies; add yours here (the defaults are replaced, so keep the ones
 # you want).
 ignore_dirs = [
-  ".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
-  ".pytest_cache", ".ruff_cache", "dist", "build", "target", ".next", ".nuxt",
-  ".wrangler", ".cache", ".countersign", "coverage", ".tox", ".idea",
-  ".vscode", "vendor",
+  ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
+  ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build", "target",
+  ".next", ".nuxt", ".wrangler", ".cache", ".countersign", "coverage", ".tox",
+  ".idea", ".vscode", "vendor",
 ]
 # File extensions scanned. Only add extensions where the rules behave.
 extensions = [
@@ -60,7 +66,7 @@ exclude_tests = true
 [claims]
 # Declaration of what is true about this repository, each claim with the
 # command that fails if the claim is false. Create claims.toml next to this
-# file. Set file = "" to run scan-only.
+# file. Set file = "" to run scan-only (reported as skipped, not passed).
 file = "claims.toml"
 
 [receipts]
@@ -68,9 +74,11 @@ file = "claims.toml"
 dir = ".countersign"
 
 [run]
-# Per-claim command timeout, seconds.
+# Per-claim command timeout, seconds. A claim that runs longer is killed,
+# with everything it spawned, and recorded as timed out.
 timeout_s = 300
-# How much captured command output a receipt keeps, bytes.
+# How much captured command output a receipt keeps, in characters. Longer
+# output is kept from both ends with the middle cut out.
 max_output_bytes = 20000
 """
 
@@ -95,25 +103,42 @@ def _use_color(args: argparse.Namespace) -> bool:
     return sys.stdout.isatty()
 
 
+def _load_config(config_path: Path) -> Config | None:
+    try:
+        return Config.load(config_path)
+    except ConfigError as exc:
+        print(f"config cannot be used as written: {exc}", file=sys.stderr)
+        return None
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     config_path = Path(args.config).resolve()
     if not config_path.exists():
         print(f"no config at {config_path}; run: countersign init", file=sys.stderr)
         return EXIT_USAGE
-    config = Config.load(config_path)
+    config = _load_config(config_path)
+    if config is None:
+        return EXIT_USAGE
     if args.no_claims:
         config.claims_file = None
 
     register = Register(config.register_path())
-    intact, chain_note = register.verify_chain()
+    try:
+        intact, chain_note = register.verify_chain()
+    except OSError as exc:
+        print(f"the evidence register cannot be read: {exc}", file=sys.stderr)
+        return EXIT_FAIL
     if not intact:
         print(f"the evidence register is damaged: {chain_note}", file=sys.stderr)
         print("nothing can be countersigned on top of a broken chain; investigate before running again", file=sys.stderr)
         return EXIT_FAIL
 
     try:
-        result = run_gate(config)
-    except Exception as exc:  # a claims file that cannot be honoured as written
+        result = run_gate(config, register=register)
+    except (ConfigError, ClaimsError) as exc:
+        print(f"verification could not run: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except (RegisterDamaged, OSError) as exc:
         print(f"verification could not run: {exc}", file=sys.stderr)
         return EXIT_FAIL
 
@@ -128,8 +153,6 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         summary_path.write_text(markdown_summary(result), encoding="utf-8")
 
     if args.json:
-        import json
-
         print(json.dumps(receipt_json(result), indent=2, sort_keys=True))
     else:
         print(terminal_summary(result, use_color=_use_color(args)))
@@ -144,12 +167,14 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 def _cmd_check(args: argparse.Namespace) -> int:
     config_path = Path(args.config).resolve()
-    config = Config.load(config_path)
+    config = _load_config(config_path)
+    if config is None:
+        return EXIT_USAGE
     register = Register(config.register_path())
     try:
         intact, note = register.verify_chain()
-    except RegisterDamaged as exc:
-        print(f"register damaged: {exc}", file=sys.stderr)
+    except OSError as exc:
+        print(f"the evidence register cannot be read: {exc}", file=sys.stderr)
         return EXIT_FAIL
     print(f"{config.register_path()}: {note}")
     return EXIT_OK if intact else EXIT_FAIL
@@ -160,8 +185,14 @@ def _cmd_reproduce(args: argparse.Namespace) -> int:
     if not config_path.exists():
         print(f"no config at {config_path}", file=sys.stderr)
         return EXIT_USAGE
-    config = Config.load(config_path)
-    reproduced, notes = reproduce_run(config, args.run)
+    config = _load_config(config_path)
+    if config is None:
+        return EXIT_USAGE
+    try:
+        reproduced, notes = reproduce_run(config, args.run)
+    except OSError as exc:
+        print(f"reproduce could not run: {exc}", file=sys.stderr)
+        return EXIT_FAIL
     for note in notes:
         print(note)
     return EXIT_OK if reproduced else EXIT_FAIL
@@ -208,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
-        return EXIT_USAGE
+        return EXIT_INTERRUPTED
 
 
 if __name__ == "__main__":

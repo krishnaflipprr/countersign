@@ -1,3 +1,4 @@
+# audited on 20260903
 """The evidence register: append only, hash chained, plain files.
 
 Every check Countersign runs, every finding it produces and every claim
@@ -7,15 +8,22 @@ and ``verify_chain`` says so. This is what makes a receipt tamper evident:
 not a claim on a website, but arithmetic anyone can redo.
 
 Adapted from Gaigentic Verify's register (2026), which ran this exact design
-through a file-by-file production certification.
+through a file-by-file production review.
 
 Deliberately a file, not a database. It has to run inside any repository on
 any machine on day one, and a file is something an auditor can copy, diff
 and keep.
+
+Appends take an exclusive lock on a sibling ``.lock`` file for the read-head,
+write-entry pair. Without it, two runs started at the same moment (two CI
+jobs on one checkout, a human and a hook) could both chain onto the same
+head and leave a register that is broken forever, indistinguishable from
+tampering.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -23,6 +31,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl; msvcrt provides byte-range locks
+    fcntl = None
+    import msvcrt
 
 GENESIS = "0" * 64
 
@@ -40,6 +54,27 @@ def entry_hash(previous_hash: str, body: dict[str, Any]) -> str:
     return hashlib.sha256((previous_hash + _canonical(body)).encode("utf-8")).hexdigest()
 
 
+@contextlib.contextmanager
+def _exclusive(lock_path: Path) -> Iterator[None]:
+    """Hold an exclusive advisory lock on ``lock_path`` for the block."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        else:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 @dataclass
 class Register:
     """Append-only log of everything a verification run did."""
@@ -48,7 +83,10 @@ class Register:
 
     def __post_init__(self) -> None:
         self.path = Path(self.path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def lock_path(self) -> Path:
+        return self.path.parent / (self.path.name + ".lock")
 
     # ---- writing ----
 
@@ -60,26 +98,29 @@ class Register:
         be worse than evidence never written at all: the register would be
         short an entry and nobody would know which.
         """
-        previous = self.head()
-        previous_hash = previous["hash"] if previous else GENESIS
-        index = (previous["index"] + 1) if previous else 0
-        recorded_at = (at or datetime.now(timezone.utc)).isoformat()
+        with _exclusive(self.lock_path):
+            previous = self.head()
+            previous_hash = previous["hash"] if previous else GENESIS
+            index = (previous["index"] + 1) if previous else 0
+            recorded_at = (at or datetime.now(timezone.utc)).isoformat()
 
-        core = {"index": index, "kind": kind, "recorded_at": recorded_at, "body": body}
-        entry = {**core, "previous_hash": previous_hash, "hash": entry_hash(previous_hash, core)}
+            core = {"index": index, "kind": kind, "recorded_at": recorded_at, "body": body}
+            entry = {**core, "previous_hash": previous_hash, "hash": entry_hash(previous_hash, core)}
 
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, sort_keys=True, default=str) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, sort_keys=True, default=str) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
         return entry
 
     # ---- reading ----
 
     def entries(self) -> Iterator[dict[str, Any]]:
+        """Every entry, in order, without verifying the chain. Use
+        ``verify_chain`` first when the file may have been touched."""
         if not self.path.exists():
             return
-        with self.path.open(encoding="utf-8") as handle:
+        with self.path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 line = line.strip()
                 if line:
@@ -105,17 +146,19 @@ class Register:
                 collected = handle.read(step) + collected
                 stripped = collected.rstrip(b"\n")
                 if b"\n" in stripped:
-                    return stripped.rsplit(b"\n", 1)[1].decode("utf-8")
+                    return stripped.rsplit(b"\n", 1)[1].decode("utf-8", errors="replace")
             final = collected.strip()
-            return final.decode("utf-8") if final else None
+            return final.decode("utf-8", errors="replace") if final else None
 
     def head(self) -> dict[str, Any] | None:
         line = self._last_line()
         if line is None:
             return None
         try:
-            entry: dict[str, Any] = json.loads(line)
-        except json.JSONDecodeError as exc:
+            entry = json.loads(line)
+            if not isinstance(entry, dict) or not isinstance(entry.get("index"), int) or not isinstance(entry.get("hash"), str):
+                raise ValueError("the line is not a register entry")
+        except ValueError as exc:  # json.JSONDecodeError is a ValueError
             raise RegisterDamaged(
                 f"the last line of {self.path.name} cannot be read as an entry, so nothing can "
                 "be added after it without breaking the chain. Keep the file and investigate "
@@ -129,13 +172,13 @@ class Register:
         A line that cannot even be parsed is itself a broken chain, not a
         crash: the likeliest way a register gets corrupted is someone opening
         the file in an editor, and the verdict has to survive whatever they
-        saved.
+        saved, including bytes that are not text.
         """
         previous_hash = GENESIS
         expected_index = 0
         if not self.path.exists():
             return True, "0 entries, chain intact"
-        with self.path.open(encoding="utf-8") as handle:
+        with self.path.open(encoding="utf-8", errors="replace") as handle:
             for line_number, line in enumerate(handle, start=1):
                 line = line.strip()
                 if not line:

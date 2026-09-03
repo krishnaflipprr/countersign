@@ -1,3 +1,4 @@
+# audited on 20260903
 import tempfile
 import unittest
 from pathlib import Path
@@ -45,6 +46,28 @@ def test_thing():
     assert True
 """
 
+FORM_FEED_PY = "def first():\n    return 1\n\x0c\n# TODO: after a form feed\ndef later():\n    pass\n"
+
+GENERIC_PROTOCOL_PY = (
+    "from typing import Protocol, TypeVar\n"
+    "T = TypeVar('T')\n"
+    "class Reader(Protocol[T]):\n"
+    "    def read(self) -> T: ...\n"
+)
+
+ABSTRACT_PY = (
+    "from abc import ABC, abstractmethod\n"
+    "class Base(ABC):\n"
+    "    @abstractmethod\n"
+    "    def run(self) -> None: ...\n"
+)
+
+BOM_PY = "﻿def fine():\n    return 1\n"
+
+EXEMPT_DEF_PY = "def hook():  # countersign: exempt\n    pass\n"
+
+STALE_EXEMPT_PY = "def fine():\n    return 1  # countersign: exempt\n"
+
 
 class TestStubScan(unittest.TestCase):
     def setUp(self):
@@ -61,8 +84,18 @@ class TestStubScan(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
+    def _scan_single(self, name: str, content: str | bytes):
+        target = self.root / "single" / name
+        target.parent.mkdir(exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content, encoding="utf-8")
+        config = Config(root=self.root, config_path=self.root / "countersign.toml", paths=[f"single/{name}"])
+        return scan_tree(config)
+
     def test_finds_marker_fabricated_and_empty_body(self):
-        findings, _exemptions, files = scan_tree(self.config)
+        findings, _exemptions, _inert, files = scan_tree(self.config)
         rule_ids = {f.rule_id for f in findings}
         self.assertIn("unfinished-marker", rule_ids)
         self.assertIn("fabricated-data", rule_ids)
@@ -72,26 +105,59 @@ class TestStubScan(unittest.TestCase):
         self.assertGreaterEqual(files, 3)
 
     def test_finds_coming_soon_in_typescript(self):
-        findings, _exemptions, _files = scan_tree(self.config)
+        findings, _exemptions, _inert, _files = scan_tree(self.config)
         self.assertTrue(any(f.rule_id == "coming-soon" and f.path == "src/banner.ts" for f in findings))
 
     def test_overloads_are_not_reported(self):
-        findings, _exemptions, _files = scan_tree(self.config)
+        findings, _exemptions, _inert, _files = scan_tree(self.config)
         self.assertFalse(any(f.path == "src/shapes.py" for f in findings))
 
     def test_exempted_line_produces_no_finding_but_counts(self):
-        findings, exemptions, _files = scan_tree(self.config)
+        findings, exemptions, inert, _files = scan_tree(self.config)
         self.assertFalse(any("deliberate exemption" in f.evidence for f in findings))
         self.assertGreaterEqual(exemptions, 1)
 
     def test_test_files_excluded_by_policy(self):
-        findings, _exemptions, _files = scan_tree(self.config)
+        findings, _exemptions, _inert, _files = scan_tree(self.config)
         self.assertFalse(any(f.path.startswith("tests/") for f in findings))
 
     def test_test_files_scanned_when_policy_turned_off(self):
         self.config.exclude_tests = False
-        findings, _exemptions, _files = scan_tree(self.config)
+        findings, _exemptions, _inert, _files = scan_tree(self.config)
         self.assertTrue(any(f.path == "tests/test_api.py" for f in findings))
+
+    def test_form_feed_keeps_line_numbers(self):
+        findings, _exemptions, _inert, _files = self._scan_single("pages.py", FORM_FEED_PY)
+        located = {(f.rule_id, f.line) for f in findings}
+        self.assertEqual(located, {("unfinished-marker", 4), ("empty-body", 5)})
+
+    def test_generic_protocol_methods_are_not_reported(self):
+        findings, _exemptions, _inert, _files = self._scan_single("reader.py", GENERIC_PROTOCOL_PY)
+        self.assertEqual(findings, [])
+
+    def test_abstract_methods_are_not_reported(self):
+        findings, _exemptions, _inert, _files = self._scan_single("base.py", ABSTRACT_PY)
+        self.assertEqual(findings, [])
+
+    def test_byte_order_mark_is_not_a_finding(self):
+        findings, _exemptions, _inert, _files = self._scan_single("bom.py", BOM_PY.encode("utf-8"))
+        self.assertEqual(findings, [])
+
+    def test_null_byte_is_reported_as_unparseable(self):
+        findings, _exemptions, _inert, _files = self._scan_single("broken.py", b"def fine():\n    return 1\n\x00")
+        self.assertEqual([f.rule_id for f in findings], ["unparseable"])
+
+    def test_exempted_empty_body_counts_once(self):
+        findings, exemptions, inert, _files = self._scan_single("hook.py", EXEMPT_DEF_PY)
+        self.assertEqual(findings, [])
+        self.assertEqual(exemptions, 1)
+        self.assertEqual(inert, 0)
+
+    def test_marker_that_suppresses_nothing_is_reported_as_inert_not_used(self):
+        findings, exemptions, inert, _files = self._scan_single("stale.py", STALE_EXEMPT_PY)
+        self.assertEqual(findings, [])
+        self.assertEqual(exemptions, 0)
+        self.assertEqual(inert, 1)
 
 
 if __name__ == "__main__":

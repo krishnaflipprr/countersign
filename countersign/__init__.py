@@ -1,3 +1,4 @@
+# audited on 20260903
 """Countersign: deterministic verification of agent completion claims.
 
 The agent signs (claims the work is done). Countersign only countersigns

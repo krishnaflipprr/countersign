@@ -1,3 +1,4 @@
+# audited on 20260903
 """The evidence pack: one self-contained HTML file per run.
 
 This is the artifact someone hands to someone else: a lead engineer
@@ -18,19 +19,26 @@ from pathlib import Path
 
 from . import __version__
 from .claims import FAIL, PASS, TIMEOUT
-from .engine import FAIL_VERDICT, GateResult
+from .engine import FAIL_VERDICT, TEST_EXCLUSION_NOTE, GateResult
+from .receipt import commit_label
 from .stubscan import RULES
 
-NOT_COVERED: tuple[str, ...] = (
+NOT_COVERED_ALWAYS: tuple[str, ...] = (
     "This pack reports deterministic checks run in this repository, on this machine, at the "
-    "time stated. It is not a security audit, not a code review, and not a certification of "
+    "time stated. It is not a security audit, not a code review, and not a statement of "
     "fitness for any purpose.",
     "Only the claims declared in the claims file were verified. Anything nobody declared was "
     "not checked.",
-    "Test files were excluded from the marker scan by policy: test code legitimately "
-    "fabricates data. The exclusion is recorded on this pack when it applies.",
+    "Claim commands are the declaring team's own commands, run exactly as declared. Whether "
+    "they are deterministic, and whether they test what their statement says, is the team's "
+    "responsibility; Countersign records what they did.",
     "Line exemptions are honored in the source itself and counted here. Each one is a human "
     "decision that a finding was a false positive; audit them like any other review decision.",
+)
+
+NOT_COVERED_TESTS_EXCLUDED = (
+    "Test files were excluded from the marker scan by policy (exclude_tests = true): test "
+    "code legitimately fabricates data. Unfinished work inside test files was not looked for."
 )
 
 
@@ -51,6 +59,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.18em; color: 
 .mono { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
 .faint { color: #6E7168; }
 .meta { display: grid; grid-template-columns: 210px 1fr; gap: 6px 16px; margin-top: 8px; }
+.meta span:nth-child(2n) { word-break: break-all; }
 table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #D3D2C8; vertical-align: top; }
 th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; color: #6E7168; font-weight: 600; }
@@ -65,6 +74,10 @@ tr:last-child td { border-bottom: none; }
 footer { max-width: 920px; margin: 18px auto 0; color: #6E7168; font-size: 12px; }
 @media print { body { padding: 0; background: #fff; } .sheet { border: none; background: #fff; } }
 """
+
+
+def _esc_lines(items: tuple[str, ...]) -> str:
+    return "\n".join(f"  <li>{_esc(item)}</li>" for item in items)
 
 
 def build_pack(result: GateResult, path: Path) -> Path:
@@ -83,7 +96,7 @@ def build_pack(result: GateResult, path: Path) -> Path:
     ) or '<tr><td colspan="4" class="faint">No marker findings.</td></tr>'
 
     if result.claim_results is None:
-        claim_rows = '<tr><td colspan="5" class="faint">No claims file was declared. The claims check was skipped, not passed.</td></tr>'
+        claim_rows = '<tr><td colspan="5" class="faint">The claims check was skipped, not passed. The notes below say why.</td></tr>'
     else:
         claim_rows = "\n".join(
             f"""<tr>
@@ -106,14 +119,20 @@ def build_pack(result: GateResult, path: Path) -> Path:
     ) + """
         <tr><td class="mono">empty-body</td><td>functions whose body does nothing (Python, structural)</td>
             <td class="mono">{}</td></tr>
+        <tr><td class="mono">unparseable</td><td>Python files the parser rejects (Python, structural)</td>
+            <td class="mono">{}</td></tr>
         <tr><td class="mono">claims</td><td>each declared claim's disproof command was executed and judged as declared</td>
             <td class="mono">{}</td></tr>
       """.format(
         len([f for f in result.findings if f.rule_id == "empty-body"]),
+        len([f for f in result.findings if f.rule_id == "unparseable"]),
         len(result.failed_claims),
     )
 
-    notes = "\n".join(f"  <li>{_esc(note)}</li>" for note in result.notes)
+    not_covered = NOT_COVERED_ALWAYS + ((NOT_COVERED_TESTS_EXCLUDED,) if result.tests_excluded else ())
+    # The test exclusion is stated in the not-covered list above when it
+    # applies, so the run note that says the same thing is not repeated.
+    notes = "\n".join(f"  <li>{_esc(note)}</li>" for note in result.notes if note != TEST_EXCLUSION_NOTE)
 
     document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -127,12 +146,12 @@ def build_pack(result: GateResult, path: Path) -> Path:
 
 <div class="meta mono">
   <span class="faint">Run reference</span><span>{_esc(result.run_id)}</span>
-  <span class="faint">Git commit</span><span>{_esc(result.git_commit)}</span>
+  <span class="faint">Git commit</span><span>{_esc(commit_label(result))}</span>
   <span class="faint">Generated</span><span>{generated:%d %b %Y %H:%M} UTC</span>
   <span class="faint">Countersign version</span><span>{_esc(__version__)}</span>
   <span class="faint">Files scanned</span><span>{_esc(result.files_scanned)}</span>
-  <span class="faint">Config (SHA-256)</span><span>{_esc(result.config_sha256[:24])}...</span>
-  <span class="faint">Claims file (SHA-256)</span><span>{_esc((result.claims_sha256 or 'none declared')[:24])}...</span>
+  <span class="faint">Config (SHA-256)</span><span>{_esc(result.config_sha256)}</span>
+  <span class="faint">Claims file (SHA-256)</span><span>{_esc(result.claims_sha256 or 'none read; the claims check was skipped')}</span>
 </div>
 
 <h2>What was found</h2>
@@ -157,12 +176,13 @@ def build_pack(result: GateResult, path: Path) -> Path:
   <tr><th>Check</th><th>What it detects</th><th>Findings</th></tr>
   {method_rows}
 </table>
-<p class="note">Every check above is deterministic and re-runnable: same inputs, same rule
-versions, same result. No model judgement participates in any verdict on this pack.</p>
+<p class="note">The marker scan is deterministic and re-runnable: the same files under the same
+rule versions give the same findings. Claims were run exactly as declared and judged only by
+exit code or output, as declared. No model judgement participates in any verdict on this pack.</p>
 
 <h2>What this pack does not cover</h2>
 <ul>
-{_esc_lines(NOT_COVERED)}
+{_esc_lines(not_covered)}
 </ul>
 {f'<ul>{notes}</ul>' if notes else ''}
 
@@ -177,14 +197,10 @@ result for result with <span class="mono">countersign reproduce</span>.</p>
 </div>
 
 </div>
-<footer class="mono">Countersign {_esc(__version__)} · run inside this repository's own environment · no data left the machine</footer>
+<footer class="mono">Countersign {_esc(__version__)} · run inside this repository's own environment · Countersign itself made no network requests; claim commands are the declaring team's own</footer>
 </body></html>"""
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(document, encoding="utf-8")
     return path
-
-
-def _esc_lines(items: tuple[str, ...]) -> str:
-    return "\n".join(f"  <li>{_esc(item)}</li>" for item in items)

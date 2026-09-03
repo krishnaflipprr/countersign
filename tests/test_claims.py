@@ -1,4 +1,8 @@
+# audited on 20260903
+import os
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -44,6 +48,45 @@ class TestRunClaim(unittest.TestCase):
         claim = Claim("slow", "sleeps", "python3 -c \"import time; time.sleep(5)\"", timeout_s=1)
         result = self._run(claim)
         self.assertEqual(result.status, TIMEOUT)
+        self.assertIsNone(result.exit_code)
+
+    def test_output_written_before_a_timeout_is_kept(self):
+        claim = Claim(
+            "slow-talker", "prints then hangs",
+            "python3 -c \"print('started', flush=True); import time; time.sleep(5)\"",
+            timeout_s=1,
+        )
+        result = self._run(claim)
+        self.assertEqual(result.status, TIMEOUT)
+        self.assertIn("started", result.output_excerpt)
+
+    def test_undecodable_output_does_not_crash_the_run(self):
+        claim = Claim("binary", "prints bytes that are not utf-8",
+                      "python3 -c \"import sys; sys.stdout.buffer.write(b'\\\\xff\\\\xfe ok\\\\n')\"")
+        result = self._run(claim)
+        self.assertEqual(result.status, PASS)
+        self.assertIn("ok", result.output_excerpt)
+
+    @unittest.skipIf(os.name == "nt", "process groups are POSIX; Windows uses taskkill /T")
+    def test_timeout_kills_the_whole_process_tree(self):
+        grandchild = (
+            "import subprocess, sys, time; "
+            "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+            "print(p.pid, flush=True); p.wait()"
+        )
+        claim = Claim("tree", "spawns a grandchild then hangs", f"{sys.executable} -c \"{grandchild}\"", timeout_s=1)
+        result = self._run(claim)
+        self.assertEqual(result.status, TIMEOUT)
+        pid = int(result.output_excerpt.strip().splitlines()[0])
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
+        os.kill(pid, 9)
+        self.fail(f"grandchild {pid} survived the timeout")
 
 
 class TestLoadClaims(unittest.TestCase):
@@ -63,11 +106,12 @@ class TestLoadClaims(unittest.TestCase):
     def test_parses_claims(self):
         self._write(
             '[[claim]]\nid = "a"\nstatement = "A"\ncommand = "true"\n\n'
-            '[[claim]]\nid = "b"\nstatement = "B"\ncommand = "false"\nexpect = "nonzero exit"\n'
+            '[[claim]]\nid = "b"\nstatement = "B"\ncommand = "false"\nexpect = "nonzero exit"\ntimeout_s = 5\n'
         )
         claims = load_claims(self.path)
         self.assertEqual([c.claim_id for c in claims], ["a", "b"])
         self.assertEqual(claims[1].expect, "nonzero exit")
+        self.assertEqual(claims[1].timeout_s, 5)
 
     def test_duplicate_ids_rejected(self):
         self._write(
@@ -89,6 +133,24 @@ class TestLoadClaims(unittest.TestCase):
 
     def test_contains_without_needle_rejected(self):
         self._write('[[claim]]\nid = "a"\nstatement = "A"\ncommand = "true"\nexpect = "output contains"\n')
+        with self.assertRaises(ClaimsError):
+            load_claims(self.path)
+
+    def test_malformed_toml_is_a_claims_error(self):
+        self._write('[[claim]\nid = "a"\n')
+        with self.assertRaises(ClaimsError):
+            load_claims(self.path)
+
+    def test_claim_table_instead_of_array_is_a_claims_error(self):
+        self._write('[claim]\nid = "a"\nstatement = "A"\ncommand = "true"\n')
+        with self.assertRaises(ClaimsError):
+            load_claims(self.path)
+
+    def test_bad_timeout_is_a_claims_error(self):
+        self._write('[[claim]]\nid = "a"\nstatement = "A"\ncommand = "true"\ntimeout_s = "soon"\n')
+        with self.assertRaises(ClaimsError):
+            load_claims(self.path)
+        self._write('[[claim]]\nid = "a"\nstatement = "A"\ncommand = "true"\ntimeout_s = 0\n')
         with self.assertRaises(ClaimsError):
             load_claims(self.path)
 

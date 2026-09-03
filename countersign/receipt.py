@@ -1,3 +1,4 @@
+# audited on 20260903
 """The receipt: what a countersignature actually is.
 
 Three renderings of one run:
@@ -22,6 +23,24 @@ from .engine import FAIL_VERDICT, GateResult
 
 STATUS_MARK = {PASS: "PASS", FAIL: "FAIL", TIMEOUT: "TIMEOUT"}
 
+DIRTY_SUFFIX = " (uncommitted changes in the working tree)"
+
+
+def commit_label(result: GateResult) -> str:
+    """The commit as it should be read: with the dirty flag attached when the
+    scanned files were not exactly that commit."""
+    return result.git_commit + (DIRTY_SUFFIX if result.git_dirty else "")
+
+
+def _code_span(text: str) -> str:
+    """A Markdown code span that survives backticks and newlines in ``text``.
+
+    Evidence lines from TypeScript carry template literals; commands can be
+    multi-line TOML strings. A single-backtick span would break the table.
+    """
+    flat = " ".join(text.split())
+    return f"`` {flat} ``"
+
 
 def receipt_json(result: GateResult) -> dict:
     return {
@@ -34,10 +53,12 @@ def receipt_json(result: GateResult) -> dict:
             {"sha256": result.claims_sha256} if result.claims_sha256 else None
         ),
         "git_commit": result.git_commit,
+        "git_dirty": result.git_dirty,
         "scan": {
             "files_scanned": result.files_scanned,
             "findings": len(result.findings),
             "exemptions": result.exemptions,
+            "tests_excluded": result.tests_excluded,
         },
         "findings": [
             {
@@ -95,14 +116,14 @@ def markdown_summary(result: GateResult) -> str:
     verdict_word = "COUNTERSIGNED" if result.verdict != FAIL_VERDICT else "NOT COUNTERSIGNED"
     lines.append(f"## Countersign: {verdict_word}")
     lines.append("")
-    lines.append(f"| | |")
-    lines.append(f"|---|---|")
+    lines.append("| | |")
+    lines.append("|---|---|")
     lines.append(f"| Run | `{result.run_id}` |")
-    lines.append(f"| Git commit | `{result.git_commit}` |")
+    lines.append(f"| Git commit | `{result.git_commit}`{DIRTY_SUFFIX if result.git_dirty else ''} |")
     lines.append(f"| Files scanned | {result.files_scanned} |")
     lines.append(f"| Marker findings | {len(result.findings)} |")
     lines.append(f"| Line exemptions used | {result.exemptions} |")
-    claims_line = "skipped (no claims file declared)" if result.claim_results is None else f"{len(result.claim_results)} declared"
+    claims_line = "skipped, not passed (see notes)" if result.claim_results is None else f"{len(result.claim_results)} declared"
     lines.append(f"| Claims | {claims_line} |")
     lines.append(f"| Register head | `{result.register_hash[:16]}...` at entry {result.register_index} |")
     lines.append("")
@@ -114,7 +135,7 @@ def markdown_summary(result: GateResult) -> str:
         lines.append("|---|---|---|")
         for f in result.findings[:25]:
             evidence = f.evidence.replace("|", "\\|")[:120]
-            lines.append(f"| `{f.path}:{f.line}` | {f.rule_id} | `{evidence}` |")
+            lines.append(f"| `{f.path}:{f.line}` | {f.rule_id} | {_code_span(evidence)} |")
         if len(result.findings) > 25:
             lines.append(f"| ... | ... | {len(result.findings) - 25} more in the receipt JSON |")
         lines.append("")
@@ -126,7 +147,8 @@ def markdown_summary(result: GateResult) -> str:
         lines.append("|---|---|---|")
         for c in result.claim_results:
             command = c.command.replace("|", "\\|")[:100]
-            lines.append(f"| {STATUS_MARK.get(c.status, c.status)} | {c.statement} | `{command}` |")
+            statement = " ".join(c.statement.replace("|", "\\|").split())
+            lines.append(f"| {STATUS_MARK.get(c.status, c.status)} | {statement} | {_code_span(command)} |")
         lines.append("")
 
     for note in result.notes:
@@ -143,7 +165,7 @@ def terminal_summary(result: GateResult, use_color: bool = True) -> str:
 
     lines: list[str] = []
     lines.append(f"{bold}Countersign{reset} run {result.run_id}")
-    lines.append(f"  commit {result.git_commit} · {result.files_scanned} files scanned · {result.duration_ms} ms")
+    lines.append(f"  commit {commit_label(result)} · {result.files_scanned} files scanned · {result.duration_ms} ms")
     lines.append("")
 
     if result.findings:
@@ -157,7 +179,7 @@ def terminal_summary(result: GateResult, use_color: bool = True) -> str:
         lines.append(f"{green}✓{reset} marker scan: clean ({result.files_scanned} files)")
 
     if result.claim_results is None:
-        lines.append(f"{yellow}–{reset} claims: skipped, no claims file declared")
+        lines.append(f"{yellow}–{reset} claims: skipped, not passed (see note below)")
     else:
         for c in result.claim_results:
             if c.status == PASS:
@@ -177,7 +199,7 @@ def terminal_summary(result: GateResult, use_color: bool = True) -> str:
     lines.append("")
     if result.verdict == FAIL_VERDICT:
         lines.append(f"{red}{bold}NOT COUNTERSIGNED{reset} · {len(result.findings)} finding(s), {len(result.failed_claims)} failed claim(s)")
-        lines.append(f"The work did not pass its own declared checks. Fix the code or the claims.")
+        lines.append("The work did not pass its own declared checks. Fix the code or the claims.")
     else:
         lines.append(f"{green}{bold}COUNTERSIGNED{reset} · register entry {result.register_index}, head {result.register_hash[:16]}...")
     return "\n".join(lines)

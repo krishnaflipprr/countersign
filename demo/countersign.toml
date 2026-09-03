@@ -1,3 +1,4 @@
+# audited on 20260903
 # The demo gate. This tree exists to contain planted defects; its expected
 # verdict is NOT COUNTERSIGNED, and the root claims.toml asserts exactly
 # that. If this run ever passes, the demo (or the engine) broke.

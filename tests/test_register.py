@@ -1,5 +1,7 @@
+# audited on 20260903
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -65,6 +67,43 @@ class TestRegister(unittest.TestCase):
         self.assertIn("cannot be read", note)
         with self.assertRaises(RegisterDamaged):
             self.register.head()
+
+    def test_binary_garbage_is_a_verdict_not_a_crash(self):
+        self.register.append("run_started", {"run_id": "a"})
+        with self.path.open("ab") as handle:
+            handle.write(b"\xff\xfe\x00 not text\n")
+        intact, note = self.register.verify_chain()
+        self.assertFalse(intact)
+        self.assertIn("cannot be read", note)
+        with self.assertRaises(RegisterDamaged):
+            self.register.head()
+
+    def test_reading_does_not_create_the_directory(self):
+        nested = Path(self._tmp.name) / "nested" / "register.jsonl"
+        register = Register(nested)
+        intact, _note = register.verify_chain()
+        self.assertTrue(intact)
+        self.assertIsNone(register.head())
+        self.assertFalse(nested.parent.exists())
+        register.append("run_started", {"run_id": "a"})
+        self.assertTrue(nested.exists())
+
+    def test_concurrent_appends_keep_the_chain_intact(self):
+        threads_count, per_thread = 8, 6
+
+        def work(label: int) -> None:
+            for step in range(per_thread):
+                self.register.append("finding", {"thread": label, "step": step})
+
+        threads = [threading.Thread(target=work, args=(label,)) for label in range(threads_count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        intact, note = self.register.verify_chain()
+        self.assertTrue(intact, note)
+        indices = [entry["index"] for entry in self.register.entries()]
+        self.assertEqual(indices, list(range(threads_count * per_thread)))
 
 
 if __name__ == "__main__":

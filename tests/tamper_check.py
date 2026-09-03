@@ -1,3 +1,4 @@
+# audited on 20260903
 """Executable claim: a tampered register must be caught by the chain check.
 
 Run by the repository's own claims.toml. Exit 0 only when tampering a

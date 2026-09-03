@@ -1,7 +1,8 @@
+# audited on 20260903
 name: "Countersign"
 description: "Your agent signs. Countersign proves it. Deterministic verification of agent completion claims: marker scan plus falsifiable-claims gate, tamper-evident receipts."
 branding:
-  icon: "verified"
+  icon: "check-circle"
   color: "green"
 
 inputs:
@@ -13,6 +14,10 @@ inputs:
     description: "fail makes the workflow fail when the run is not countersigned; warn records the verdict without failing"
     required: false
     default: "fail"
+  receipts-dir:
+    description: "The receipts directory to upload as an artifact. Must match [receipts] dir in the config."
+    required: false
+    default: ".countersign"
 
 runs:
   using: "composite"
@@ -20,27 +25,32 @@ runs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.11"
-
-    - name: Install Countersign
-      shell: bash
-      run: pip install "${{ github.action_path }}"
+        python-version: "3.12"
 
     - name: Verify
       id: countersign
       shell: bash
+      # Countersign is standard library only, so it runs straight from the
+      # action checkout: no pip install, no build backend fetched from PyPI,
+      # nothing added to the workflow's environment.
+      env:
+        PYTHONPATH: ${{ github.action_path }}
+        COUNTERSIGN_CONFIG: ${{ inputs.config }}
+        COUNTERSIGN_FAIL_ON: ${{ inputs.fail-on }}
       run: |
         set +e
-        countersign verify --config "${{ inputs.config }}" \
+        python -m countersign verify --config "$COUNTERSIGN_CONFIG" --no-color \
           --summary-file "$RUNNER_TEMP/countersign-summary.md"
         status=$?
         set -e
-        cat "$RUNNER_TEMP/countersign-summary.md" >> "$GITHUB_STEP_SUMMARY" || true
-        if [ "$status" -ne 0 ] && [ "${{ inputs.fail-on }}" != "warn" ]; then
+        if [ -f "$RUNNER_TEMP/countersign-summary.md" ]; then
+          cat "$RUNNER_TEMP/countersign-summary.md" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        if [ "$status" -ne 0 ] && [ "$COUNTERSIGN_FAIL_ON" != "warn" ]; then
           exit "$status"
         fi
         if [ "$status" -ne 0 ]; then
-          echo "::warning::Countersign verdict: NOT COUNTERSIGNED (fail-on=warn, workflow continues)"
+          echo "::warning::Countersign verdict: NOT COUNTERSIGNED, exit $status (fail-on=warn, workflow continues)"
         fi
 
     - name: Upload receipts
@@ -48,6 +58,6 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: countersign-receipts
-        path: .countersign/
+        path: ${{ inputs.receipts-dir }}
         if-no-files-found: ignore
         retention-days: 90

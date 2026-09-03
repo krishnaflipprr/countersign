@@ -1,3 +1,4 @@
+# audited on 20260903
 """Prove that a recorded run still reproduces.
 
 The promise this module keeps: any verification run can be re-run later,
@@ -10,6 +11,10 @@ Commands that touch the outside world may legitimately diverge (a test that
 pings a live service can pass today and fail in a year); each divergence is
 reported, not excused. The marker scan has no such excuse: it is pure
 arithmetic over files, and any difference means the files changed.
+
+A receipt that cannot be read is a verdict (not reproduced), never a crash:
+the file may have been hand-edited, and that is exactly the case this
+command exists to catch.
 """
 
 from __future__ import annotations
@@ -17,8 +22,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .claims import load_claims, run_claim
-from .config import Config, file_sha256
+from .claims import ClaimsError, load_claims, run_claim
+from .config import Config, ConfigError, file_sha256
 from .receipt import find_receipt, load_receipt
 from .register import Register
 from .stubscan import scan_tree
@@ -31,11 +36,21 @@ def _finding_key(finding: dict) -> str:
     )
 
 
-def _claim_key(claim: dict) -> str:
-    return json.dumps(
-        {k: claim.get(k) for k in ("claim_id", "status", "exit_code")},
-        sort_keys=True,
-    )
+def _load_receipt_or_explain(receipt_path: Path) -> tuple[dict | None, str | None]:
+    try:
+        receipt = load_receipt(receipt_path)
+    except (OSError, ValueError) as exc:  # json.JSONDecodeError is a ValueError
+        return None, f"receipt {receipt_path.name} cannot be read: {exc}"
+    if not isinstance(receipt, dict):
+        return None, f"receipt {receipt_path.name} cannot be read: not a receipt object"
+    for key in ("verdict", "recorded_at", "config", "findings", "scan"):
+        if key not in receipt:
+            return None, f"receipt {receipt_path.name} cannot be read: missing '{key}'"
+    if not isinstance(receipt["config"], dict) or "sha256" not in receipt["config"]:
+        return None, f"receipt {receipt_path.name} cannot be read: config fingerprint missing"
+    if not isinstance(receipt["findings"], list):
+        return None, f"receipt {receipt_path.name} cannot be read: findings are not a list"
+    return receipt, None
 
 
 def reproduce_run(config: Config, run_id: str) -> tuple[bool, list[str]]:
@@ -46,7 +61,9 @@ def reproduce_run(config: Config, run_id: str) -> tuple[bool, list[str]]:
     if receipt_path is None:
         return False, [f"no receipt for run {run_id} under {config.receipts_root()}"]
 
-    receipt = load_receipt(receipt_path)
+    receipt, problem = _load_receipt_or_explain(receipt_path)
+    if receipt is None:
+        return False, [problem or "receipt cannot be read"]
     notes.append(f"receipt: {receipt_path.name}, verdict {receipt['verdict']}, recorded {receipt['recorded_at']}")
 
     register = Register(config.register_path())
@@ -55,7 +72,7 @@ def reproduce_run(config: Config, run_id: str) -> tuple[bool, list[str]]:
         return False, notes + [f"register: {chain_note}"]
     notes.append(f"register: {chain_note}")
 
-    recorded_config_sha = receipt["config"]["sha256"]
+    recorded_config_sha = str(receipt["config"]["sha256"])
     actual_config_sha = file_sha256(config.config_path)
     if recorded_config_sha != actual_config_sha:
         notes.append(
@@ -79,10 +96,17 @@ def reproduce_run(config: Config, run_id: str) -> tuple[bool, list[str]]:
             else:
                 notes.append(f"claims: sha256 matches ({actual_claims_sha[:12]}...)")
 
-    rerun_findings, _exemptions, files_scanned = scan_tree(config)
+    try:
+        rerun_findings, _exemptions, _inert, files_scanned = scan_tree(config)
+    except ConfigError as exc:
+        return False, notes + [f"marker scan: cannot re-run, {exc}", "overall: NOT REPRODUCED"]
     recorded_findings = receipt["findings"]
     rerun_keys = sorted(_finding_key(f.__dict__) for f in rerun_findings)
-    recorded_keys = sorted(_finding_key(f) for f in recorded_findings)
+    recorded_keys = sorted(_finding_key(f) for f in recorded_findings if isinstance(f, dict))
+
+    recorded_files = receipt["scan"].get("files_scanned") if isinstance(receipt["scan"], dict) else None
+    if isinstance(recorded_files, int) and recorded_files != files_scanned:
+        notes.append(f"tree: {recorded_files} file(s) then, {files_scanned} now; files were added or removed since the run")
 
     scan_reproduced = rerun_keys == recorded_keys
     if scan_reproduced:
@@ -101,13 +125,25 @@ def reproduce_run(config: Config, run_id: str) -> tuple[bool, list[str]]:
     claims_reproduced = True
     recorded_claims = receipt.get("claims")
     if recorded_claims is None:
-        notes.append("claims: the run skipped the claims check (none declared); nothing to re-run")
+        notes.append("claims: the run skipped the claims check; nothing to re-run")
+    elif not isinstance(recorded_claims, list):
+        claims_reproduced = False
+        notes.append("claims: the receipt's claims section cannot be read")
     elif config.claims_path() is None:
         claims_reproduced = False
         notes.append("claims: the claims file has since been removed; cannot re-run")
     else:
-        claims = load_claims(config.claims_path()) or []
+        try:
+            claims = load_claims(config.claims_path()) or []
+        except ClaimsError as exc:
+            claims = []
+            claims_reproduced = False
+            notes.append(f"claims: the claims file can no longer be honoured as written: {exc}")
         for recorded in recorded_claims:
+            if not isinstance(recorded, dict) or "claim_id" not in recorded or "status" not in recorded:
+                claims_reproduced = False
+                notes.append("claim: a recorded claim entry cannot be read")
+                continue
             match = next((c for c in claims if c.claim_id == recorded["claim_id"]), None)
             if match is None:
                 claims_reproduced = False
@@ -115,11 +151,11 @@ def reproduce_run(config: Config, run_id: str) -> tuple[bool, list[str]]:
                 continue
             rerun_result = run_claim(match, config.root, config.timeout_s, config.max_output_bytes)
             if rerun_result.status == recorded["status"]:
-                notes.append(f"claim {recorded['claim_id']}: {recorded['status'].upper()}, reproduced ({rerun_result.duration_ms} ms)")
+                notes.append(f"claim {recorded['claim_id']}: {str(recorded['status']).upper()}, reproduced ({rerun_result.duration_ms} ms)")
             else:
                 claims_reproduced = False
                 notes.append(
-                    f"claim {recorded['claim_id']}: was {recorded['status'].upper()}, re-ran {rerun_result.status.upper()}"
+                    f"claim {recorded['claim_id']}: was {str(recorded['status']).upper()}, re-ran {rerun_result.status.upper()}"
                 )
 
     # The verdict is a pure function of the findings and the claim statuses,

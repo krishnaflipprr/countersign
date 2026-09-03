@@ -1,3 +1,4 @@
+# audited on 20260903
 # What the demo claims about itself. One claim is true, one is false; the
 # false one is the point.
 
@@ -10,5 +11,5 @@ expect = "exit 0"
 [[claim]]
 id = "no-unfinished-markers"
 statement = "No unfinished-work markers in the demo source"
-command = "grep -rE '\\b(TODO|FIXME|XXX|HACK)\\b' --include='*.py' . | wc -l | grep -qx 0"
-expect = "exit 0"
+command = "grep -rqE '\\b(TODO|FIXME|XXX|HACK)\\b' --include='*.py' ."
+expect = "nonzero exit"

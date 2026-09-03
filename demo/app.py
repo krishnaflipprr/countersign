@@ -1,3 +1,4 @@
+# audited on 20260903
 """A tiny accounts service, deliberately unfinished in places.
 
 This file is the demo target. The defects below are planted on purpose so a
