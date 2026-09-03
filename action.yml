@@ -27,7 +27,7 @@ runs:
   using: "composite"
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: "3.12"
 
@@ -68,9 +68,12 @@ runs:
 
     - name: Upload receipts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: countersign-receipts
         path: ${{ inputs.receipts-dir }}
+        # The receipts directory is dot-prefixed; upload-artifact skips
+        # hidden paths unless told otherwise.
+        include-hidden-files: true
         if-no-files-found: ignore
         retention-days: 90
