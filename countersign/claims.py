@@ -35,6 +35,11 @@ from typing import Any
 PASS = "pass"
 FAIL = "fail"
 TIMEOUT = "timeout"
+# A claim the repository's config requires but the claims file does not
+# declare. It fails the gate: a required claim that nobody wrote is the
+# quietest way to weaken a repository's own standard.
+MISSING = "missing"
+NOT_PASSED = frozenset({FAIL, TIMEOUT, MISSING})
 
 VALID_EXPECTATIONS = frozenset({"exit 0", "nonzero exit", "output contains"})
 
@@ -74,11 +79,20 @@ def load_claims(path: Path | None) -> list[Claim] | None:
     """Parse claims.toml. None means no file (a reported skip, not silence)."""
     if path is None:
         return None
+    with Path(path).open("rb") as handle:
+        data = handle.read()
+    return parse_claims(data, Path(path).name)
+
+
+def parse_claims(data: bytes | str, source_name: str = "claims.toml") -> list[Claim]:
+    """Parse the text of a claims file. Raises ClaimsError for anything that
+    cannot be honoured as written."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
     try:
-        with Path(path).open("rb") as handle:
-            raw = tomllib.load(handle)
+        raw = tomllib.loads(data.decode("utf-8", errors="replace"))
     except tomllib.TOMLDecodeError as exc:
-        raise ClaimsError(f"{Path(path).name} is not valid TOML: {exc}") from None
+        raise ClaimsError(f"{source_name} is not valid TOML: {exc}") from None
     declared: Any = raw.get("claim", [])
     if not isinstance(declared, list) or not all(isinstance(entry, dict) for entry in declared):
         raise ClaimsError("claims must be declared as an array of tables: one [[claim]] block per claim")
@@ -122,6 +136,17 @@ def load_claims(path: Path | None) -> list[Claim] | None:
             )
         )
     return claims
+
+
+def missing_claim(claim_id: str) -> ClaimResult:
+    """The verdict for a required claim that was never declared."""
+    return ClaimResult(
+        claim_id=claim_id,
+        statement="required by countersign.toml but not declared in the claims file",
+        command="",
+        expect="exit 0",
+        status=MISSING,
+    )
 
 
 def _truncate(text: str, limit: int) -> str:

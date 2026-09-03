@@ -18,6 +18,10 @@ inputs:
     description: "The receipts directory to upload as an artifact. Must match [receipts] dir in the config."
     required: false
     default: ".countersign"
+  claims-base:
+    description: "Git revision to diff the claims file against. Empty means the pull request's base branch on pull_request events and no diff otherwise."
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -37,10 +41,19 @@ runs:
         PYTHONPATH: ${{ github.action_path }}
         COUNTERSIGN_CONFIG: ${{ inputs.config }}
         COUNTERSIGN_FAIL_ON: ${{ inputs.fail-on }}
+        COUNTERSIGN_CLAIMS_BASE: ${{ inputs.claims-base }}
+        PR_BASE_REF: ${{ github.base_ref }}
       run: |
+        base_args=()
+        if [ -n "$COUNTERSIGN_CLAIMS_BASE" ]; then
+          base_args=(--claims-base "$COUNTERSIGN_CLAIMS_BASE")
+        elif [ -n "$PR_BASE_REF" ]; then
+          git fetch --no-tags --depth=1 origin "$PR_BASE_REF" || true
+          base_args=(--claims-base "origin/$PR_BASE_REF")
+        fi
         set +e
         python -m countersign verify --config "$COUNTERSIGN_CONFIG" --no-color \
-          --summary-file "$RUNNER_TEMP/countersign-summary.md"
+          --summary-file "$RUNNER_TEMP/countersign-summary.md" "${base_args[@]}"
         status=$?
         set -e
         if [ -f "$RUNNER_TEMP/countersign-summary.md" ]; then

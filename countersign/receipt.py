@@ -18,10 +18,10 @@ import json
 from pathlib import Path
 
 from . import __version__
-from .claims import FAIL, PASS, TIMEOUT
+from .claims import FAIL, MISSING, PASS, TIMEOUT
 from .engine import FAIL_VERDICT, GateResult
 
-STATUS_MARK = {PASS: "PASS", FAIL: "FAIL", TIMEOUT: "TIMEOUT"}
+STATUS_MARK = {PASS: "PASS", FAIL: "FAIL", TIMEOUT: "TIMEOUT", MISSING: "MISSING"}
 
 DIRTY_SUFFIX = " (uncommitted changes in the working tree)"
 
@@ -88,6 +88,25 @@ def receipt_json(result: GateResult) -> dict:
             ]
         ),
         "claims_status": result.claims_status,
+        "claims_diff": (
+            None
+            if result.claims_diff is None
+            else {
+                "base": result.claims_base,
+                "base_problem": result.claims_base_problem,
+                "weakened": len(result.weakened_claims),
+                "changes": [
+                    {
+                        "claim_id": c.claim_id,
+                        "kind": c.kind,
+                        "fields": list(c.fields),
+                        "weakened": c.weakened,
+                        "detail": c.detail,
+                    }
+                    for c in result.claims_diff
+                ],
+            }
+        ),
         "register": {"index": result.register_index, "hash": result.register_hash},
         "duration_ms": result.duration_ms,
         "notes": result.notes,
@@ -125,6 +144,8 @@ def markdown_summary(result: GateResult) -> str:
     lines.append(f"| Line exemptions used | {result.exemptions} |")
     claims_line = "skipped, not passed (see notes)" if result.claim_results is None else f"{len(result.claim_results)} declared"
     lines.append(f"| Claims | {claims_line} |")
+    if result.claims_diff is not None:
+        lines.append(f"| Claims changed against `{result.claims_base}` | {len(result.claims_diff)}, {len(result.weakened_claims)} weakened |")
     lines.append(f"| Register head | `{result.register_hash[:16]}...` at entry {result.register_index} |")
     lines.append("")
 
@@ -148,7 +169,17 @@ def markdown_summary(result: GateResult) -> str:
         for c in result.claim_results:
             command = c.command.replace("|", "\\|")[:100]
             statement = " ".join(c.statement.replace("|", "\\|").split())
-            lines.append(f"| {STATUS_MARK.get(c.status, c.status)} | {statement} | {_code_span(command)} |")
+            lines.append(f"| {STATUS_MARK.get(c.status, c.status)} | {statement} | {_code_span(command) if command else 'none declared'} |")
+        lines.append("")
+
+    if result.claims_diff:
+        lines.append(f"### Claims changed against `{result.claims_base}`")
+        lines.append("")
+        lines.append("| Claim | Change | Weakened | Detail |")
+        lines.append("|---|---|---|---|")
+        for change in result.claims_diff:
+            detail = " ".join(change.detail.replace("|", "\\|").split())[:200]
+            lines.append(f"| `{change.claim_id}` | {change.kind} | {'YES' if change.weakened else 'no'} | {detail} |")
         lines.append("")
 
     for note in result.notes:
@@ -186,6 +217,8 @@ def terminal_summary(result: GateResult, use_color: bool = True) -> str:
                 lines.append(f"{green}✓{reset} claim {c.claim_id}: {c.statement}")
             elif c.status == TIMEOUT:
                 lines.append(f"{red}✗{reset} claim {c.claim_id}: TIMED OUT after {c.duration_ms} ms: {c.statement}")
+            elif c.status == MISSING:
+                lines.append(f"{red}✗{reset} claim {c.claim_id}: MISSING, {c.statement}")
             else:
                 excerpt = (c.output_excerpt or "").strip().splitlines()
                 tail = excerpt[-1][:120] if excerpt else "no output"
@@ -193,12 +226,21 @@ def terminal_summary(result: GateResult, use_color: bool = True) -> str:
                 lines.append(f"    command: {c.command}")
                 lines.append(f"    output ends: {tail}")
 
+    if result.claims_diff is not None:
+        weakened = result.weakened_claims
+        mark = f"{red}✗{reset}" if weakened else f"{green}✓{reset}"
+        lines.append(f"{mark} claims against {result.claims_base}: {len(result.claims_diff)} change(s), {len(weakened)} weakened")
+        for change in result.claims_diff:
+            flag = "WEAKENED " if change.weakened else ""
+            lines.append(f"    {flag}{change.kind} {change.claim_id}: {change.detail[:140]}")
+
     for note in result.notes:
         lines.append(f"{yellow}–{reset} note: {note}")
 
     lines.append("")
     if result.verdict == FAIL_VERDICT:
-        lines.append(f"{red}{bold}NOT COUNTERSIGNED{reset} · {len(result.findings)} finding(s), {len(result.failed_claims)} failed claim(s)")
+        weakened_part = f", {len(result.weakened_claims)} weakened claim(s)" if result.weakened_claims else ""
+        lines.append(f"{red}{bold}NOT COUNTERSIGNED{reset} · {len(result.findings)} finding(s), {len(result.failed_claims)} failed claim(s){weakened_part}")
         lines.append("The work did not pass its own declared checks. Fix the code or the claims.")
     else:
         lines.append(f"{green}{bold}COUNTERSIGNED{reset} · register entry {result.register_index}, head {result.register_hash[:16]}...")

@@ -1,15 +1,16 @@
 # audited on 20260903
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "countersign"
+name = "countersign-cli"
 version = "0.1.0"
 description = "Your agent signs. Countersign proves it. Deterministic verification of agent completion claims, with tamper-evident receipts."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Krishna" }]
 keywords = ["ai-agents", "verification", "ci", "developer-tools", "evidence"]
 classifiers = [

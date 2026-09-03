@@ -189,6 +189,68 @@ class TestGate(unittest.TestCase):
         self.assertIn("uncommitted", markdown_summary(result))
         self.assertTrue(receipt_json(result)["git_dirty"])
 
+    def test_required_claim_not_declared_is_missing_and_fails(self):
+        (self.root / "src" / "service.py").write_text(SERVICE_CLEAN, encoding="utf-8")
+        self.config.required_claims = ["tests-pass", "proof-works"]
+        result = run_gate(self.config)
+        self.assertEqual(result.verdict, FAIL_VERDICT)
+        statuses = {c.claim_id: c.status for c in result.claim_results}
+        self.assertEqual(statuses, {"proof-works": "pass", "tests-pass": "missing"})
+        terminal = terminal_summary(result, use_color=False)
+        self.assertIn("MISSING", terminal)
+        self.assertIn("MISSING", markdown_summary(result))
+        pack_text = build_pack(result, self.config.receipts_root() / f"{result.run_id}.html").read_text(encoding="utf-8")
+        self.assertIn("none declared", pack_text)
+        self.assertTrue(any(entry["kind"] == "claim" and entry["body"]["status"] == "missing" for entry in Register(self.config.register_path()).entries()))
+
+    def test_required_claim_with_no_claims_file_still_fails(self):
+        (self.root / "claims.toml").unlink()
+        self.config.required_claims = ["tests-pass"]
+        result = run_gate(self.config)
+        self.assertEqual(result.verdict, FAIL_VERDICT)
+        self.assertEqual([c.status for c in result.claim_results], ["missing"])
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_weakened_claim_against_base_fails_and_is_recorded(self):
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+        (self.root / "src" / "service.py").write_text(SERVICE_CLEAN, encoding="utf-8")
+        (self.root / ".gitignore").write_text(".countersign/\n", encoding="utf-8")
+        subprocess.run([*git, "init", "-q", "-b", "main"], cwd=self.root, check=True, capture_output=True)
+        subprocess.run([*git, "add", "."], cwd=self.root, check=True, capture_output=True)
+        subprocess.run([*git, "commit", "-q", "-m", "base"], cwd=self.root, check=True, capture_output=True)
+        (self.root / "claims.toml").write_text(CLAIMS_TOML.replace('expect = "exit 0"', 'expect = "nonzero exit"'), encoding="utf-8")
+
+        result = run_gate(self.config, claims_base="main")
+        self.assertEqual(result.verdict, FAIL_VERDICT)
+        self.assertEqual(len(result.weakened_claims), 1)
+        receipt = receipt_json(result)
+        self.assertEqual(receipt["claims_diff"]["weakened"], 1)
+        self.assertEqual(receipt["claims_diff"]["changes"][0]["fields"], ["expect"])
+        self.assertIn("WEAKENED", terminal_summary(result, use_color=False))
+        self.assertIn("Claims changed against", markdown_summary(result))
+        pack_text = build_pack(result, self.config.receipts_root() / f"{result.run_id}.html").read_text(encoding="utf-8")
+        self.assertIn("Claims changed against", pack_text)
+        kinds = [entry["kind"] for entry in Register(self.config.register_path()).entries()]
+        self.assertIn("claims_diff", kinds)
+
+        self.config.fail_on_weakened = False
+        (self.root / "src" / "service.py").write_text(SERVICE_CLEAN, encoding="utf-8")
+        result = run_gate(self.config, claims_base="main")
+        self.assertEqual(result.verdict, FAIL_VERDICT, "the weakened claim itself now fails: the proof command exits 0 but expects nonzero")
+        self.assertTrue(any("recorded, not failed" in note for note in result.notes))
+
+    def test_claims_base_without_claims_file_is_a_config_error(self):
+        self.config.claims_file = None
+        with self.assertRaises(ConfigError):
+            run_gate(self.config, claims_base="main")
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_repository_without_commits_is_named_as_such(self):
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True, capture_output=True)
+        result = run_gate(self.config)
+        self.assertEqual(result.git_commit, "no commits yet")
+        self.assertTrue(result.git_dirty)
+
     def test_outside_a_repository_git_state_is_unknown_not_clean(self):
         result = run_gate(self.config)
         self.assertEqual(result.git_commit, "not a git repository")

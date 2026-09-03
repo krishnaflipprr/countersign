@@ -11,10 +11,13 @@ Two layers:
 
 1. Marker rules (all languages in scope): regex over each line, ported from
    the proven gate.
-2. Structural rules (Python only, via the ast module): functions whose body
-   is nothing (a bare ``pass`` or ``...``) are reported even when no marker
-   comment advertises them. Overloads, abstract methods and Protocol methods
-   are the legitimate uses of empty bodies and are excluded.
+2. Structural rules: functions whose body is nothing are reported even when
+   no marker comment advertises them. Python is checked through the ast
+   module (a bare ``pass`` or ``...``; overloads, abstract methods and
+   Protocol methods are the legitimate empty bodies and are excluded).
+   TypeScript and JavaScript are checked by ``jsscan``, a comment-and-string
+   aware scan for declarations, methods and exported arrow functions with an
+   empty block.
 
 Exemptions are in the file itself: append the exemption marker to a line
 that is a genuine false positive (a UI label, a vendor capability note).
@@ -32,11 +35,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config
+from .jsscan import empty_functions as _js_empty_functions
 
 # Decorators under which an empty body is the whole point.
 EMPTY_BODY_EXEMPT_DECORATORS = frozenset({"overload", "abstractmethod"})
 # Base classes whose methods are declarations, not implementations.
 EMPTY_BODY_EXEMPT_BASES = frozenset({"Protocol"})
+
+JS_SUFFIXES = frozenset({".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"})
 
 # Python's tokenizer ends a line only at \r\n, \r or \n. str.splitlines()
 # also splits on form feeds and several Unicode separators, which would put
@@ -150,6 +156,12 @@ def _python_empty_functions(source: str) -> list[tuple[int, str]]:
     return reported
 
 
+def _is_structural_js_target(path: Path) -> bool:
+    """Declaration files carry no bodies; minified files carry polyfill noise."""
+    name = path.name
+    return not name.endswith(".d.ts") and ".min." not in name
+
+
 def scan_file(config: Config, relative: str, absolute: Path) -> tuple[list[Finding], int, int]:
     """Scan one file. Returns (findings, exemptions_used, inert_markers)."""
     try:
@@ -175,21 +187,25 @@ def scan_file(config: Config, relative: str, absolute: Path) -> tuple[list[Findi
                 else:
                     findings.append(Finding(relative, number, rule.rule_id, rule.why, line.strip()[:240]))
 
+    empty: list[tuple[int, str]] = []
     if absolute.suffix == ".py":
         try:
-            for lineno, name in _python_empty_functions(text):
-                if lineno in exempt_lines:
-                    used_exemptions.add(lineno)
-                    continue
-                marker_line = lines[lineno - 1] if 0 < lineno <= len(lines) else ""
-                findings.append(
-                    Finding(relative, lineno, "empty-body", f"function '{name}' has a body that does nothing", marker_line.strip()[:240])
-                )
+            empty = _python_empty_functions(text)
         except (SyntaxError, ValueError):
             # SyntaxError covers broken code; ValueError is what Python 3.11
             # raises for a null byte in the source, which 3.12+ reports as a
             # SyntaxError. Either way the file is not honest Python.
             findings.append(Finding(relative, 1, "unparseable", "the file cannot be parsed as Python; an agent may have left it broken", ""))
+    elif absolute.suffix in JS_SUFFIXES and _is_structural_js_target(absolute):
+        empty = _js_empty_functions(text)
+    for lineno, name in empty:
+        if lineno in exempt_lines:
+            used_exemptions.add(lineno)
+            continue
+        marker_line = lines[lineno - 1] if 0 < lineno <= len(lines) else ""
+        findings.append(
+            Finding(relative, lineno, "empty-body", f"function '{name}' has a body that does nothing", marker_line.strip()[:240])
+        )
 
     return findings, len(used_exemptions), len(exempt_lines - used_exemptions)
 

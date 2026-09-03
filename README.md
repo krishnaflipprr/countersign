@@ -57,15 +57,24 @@ If nobody can say what command would disprove the claim, the claim was not a cla
 
 Claim commands run through your shell, in the repository root, with your privileges. Treat `claims.toml` like any other executable file in the repository: review changes to it the way you review changes to CI configuration.
 
+## Who guards the claims
+
+The agent that wrote the code can also write the claims, and the quiet way past a gate is not to fix the code but to soften the claim. Three things make that visible:
+
+- **Required claims.** `required = ["tests-pass"]` in `countersign.toml` names claim ids that must be declared. A required claim nobody wrote is recorded as `MISSING` and fails the gate, so deleting the claim is not a way out.
+- **Claims diff.** `countersign verify --claims-base origin/main` (the GitHub action does this on every pull request) compares `claims.toml` with the base branch and names every change. A removed claim, a changed expectation or a changed needle is a weakening and fails the gate (`fail_on_weakened = true`); a changed command is listed for the reviewer. `countersign claims diff --base origin/main` prints the same diff on its own.
+- **Starter claims.** `countersign init` reads the build files that are actually there (package.json scripts, pytest or ruff configuration, go.mod, Cargo.toml) and writes a `claims.toml` with the stack's own test, lint and type-check commands, marking `tests-pass` as required. Nothing is guessed; a repository with no recognised build files gets a commented example.
+
 ## The marker scan
 
-Eleven rules ported from a gate that ran daily on a production tree of more than 500 source files, reviewed file by file, with zero false positives, plus a structural Python check for functions whose body does nothing (bare `pass` or `...`), which catches unfinished work that forgot to advertise itself. The structural check is Python only; the eleven marker rules apply to every language in scope.
+Eleven rules ported from a gate that ran daily on a production tree of more than 500 source files, reviewed file by file, with zero false positives, plus a structural check for functions whose body does nothing, which catches unfinished work that forgot to advertise itself. Python is checked through the parser (bare `pass` or `...`; overloads, abstract and Protocol methods are exempt). TypeScript and JavaScript are checked by a comment-and-string-aware scan of function declarations, class and object methods, and exported arrow functions (constructors, Angular lifecycle hooks, unexported callbacks, `.d.ts` and minified files are exempt). The eleven marker rules apply to every language in scope.
 
 Test files are excluded by policy: test code legitimately fabricates data, and the receipt says so. A genuine false positive is exempted in the source itself, on the line, where a reviewer sees it. Every exemption that suppressed a finding is counted on the receipt; a marker that suppresses nothing is reported as inert so a stale one cannot hide.
 
 ## Receipts, register, reproduce
 
 - Every run appends to `.countersign/register.jsonl`: an append-only, hash-chained log. Edit any earlier line and `countersign check` says so. Appends are locked, so two runs on one checkout cannot break the chain by racing.
+- What the register proves, exactly: that no entry was altered after it was written by anyone who did not also rewrite every entry after it. It lives on the machine that ran the checks, so on its own it is evidence against accident and against third parties, not against the machine's owner. Tamper evidence against the owner requires the register head to be anchored outside the machine, which is what a hosted anchoring service is for.
 - Every run writes a JSON receipt and, unless asked not to, a single-file HTML evidence pack: what was checked, how, what was found, what was not covered. Receipts name the git commit and say whether the working tree had uncommitted changes when it was scanned.
 - `countersign reproduce --run <id>` re-derives a recorded run from the same inputs and compares, result for result. The run recorded the SHA-256 of the config and claims files it read; if they changed, you are told.
 
@@ -74,10 +83,15 @@ Exit codes: 0 countersigned or reproduced, 1 not countersigned (or the register 
 ## Install and run
 
 ```bash
-pip install .            # from this repository
-countersign init         # writes countersign.toml
+pip install countersign-cli
+countersign init         # writes countersign.toml and a starter claims.toml
 countersign verify       # scan + claims gate; writes receipt, pack, register
+countersign check        # the register's hash chain
+countersign reproduce --run <id>
+countersign claims diff --base origin/main
 ```
+
+The user guide, with screenshots of every command and the evidence pack, is in [docs/guide.md](docs/guide.md).
 
 Requires Python 3.11+. Zero dependencies, standard library only, on purpose: it has to run inside any CI runner, any locked-down laptop, any air-gapped environment, with no supply-chain conversation. It also runs without installing: `PYTHONPATH=/path/to/countersign python3 -m countersign verify`.
 
@@ -111,4 +125,4 @@ v0.1. Working: marker scan, structural Python check, claims protocol, register, 
 
 ## License
 
-Proprietary, all rights reserved (see LICENSE). The license decision for the public launch (permissive open source vs source-available) is deliberately not made yet; nothing in this repository may be redistributed until it is.
+Apache License 2.0 (see LICENSE and NOTICE). The command line tool, every scan rule, the claims protocol, the register, receipts, packs and reproduce are open source in full and stay fully functional offline. Hosted anchoring, badges and organisation features are a separate service.

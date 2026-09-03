@@ -120,6 +120,8 @@ class Config:
     exempt_marker: str = DEFAULT_EXEMPT_MARKER
     exclude_tests: bool = True
     claims_file: str | None = "claims.toml"
+    required_claims: list[str] = field(default_factory=list)
+    fail_on_weakened: bool = True
     receipt_dir: str = ".countersign"
     timeout_s: int = 300
     max_output_bytes: int = 20000
@@ -154,6 +156,8 @@ class Config:
             exempt_marker=_string(scan, "scan", "exempt_marker", DEFAULT_EXEMPT_MARKER),
             exclude_tests=_boolean(scan, "scan", "exclude_tests", True),
             claims_file=claims_file,
+            required_claims=_string_list(claims, "claims", "required", []),
+            fail_on_weakened=_boolean(claims, "claims", "fail_on_weakened", True),
             receipt_dir=_string(receipts, "receipts", "dir", ".countersign"),
             timeout_s=_integer(run, "run", "timeout_s", 300, minimum=1),
             max_output_bytes=_integer(run, "run", "max_output_bytes", 20000, minimum=0),

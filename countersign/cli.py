@@ -1,12 +1,13 @@
 # audited on 20260903
 """The command line.
 
-Four verbs, no config ceremony to start:
+Five verbs, no config ceremony to start:
 
-  countersign init                    write a countersign.toml for this repo
+  countersign init                    write countersign.toml and a starter claims.toml
   countersign verify                  run the gate, write receipt + pack
   countersign check                   verify the evidence register's chain
   countersign reproduce --run ID      re-derive a recorded run
+  countersign claims diff --base REF  what changed in the claims file, weakenings named
 
 Exit codes: 0 clean or reproduced, 1 the work did not pass (or the register
 is damaged, or the run did not reproduce), 2 usage error (including a config
@@ -23,13 +24,15 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .claims import ClaimsError
+from .claims import ClaimsError, load_claims
 from .config import Config, ConfigError
 from .engine import FAIL_VERDICT, run_gate
 from .pack import build_pack
 from .receipt import markdown_summary, receipt_json, terminal_summary, write_receipt
+from .claimsdiff import diff_against_ref
 from .register import Register, RegisterDamaged
 from .reproduce import reproduce_run
+from .starter import detect_starter_claims, render_claims_toml
 
 EXIT_OK = 0
 EXIT_FAIL = 1
@@ -65,9 +68,17 @@ exclude_tests = true
 
 [claims]
 # Declaration of what is true about this repository, each claim with the
-# command that fails if the claim is false. Create claims.toml next to this
+# command that fails if the claim is false, in claims.toml next to this
 # file. Set file = "" to run scan-only (reported as skipped, not passed).
 file = "claims.toml"
+# Claim ids that must be declared. A required claim nobody wrote is recorded
+# as missing and fails the gate, so the standard cannot be lowered by
+# deleting the claim.
+required = {required}
+# When verify is given a base revision (--claims-base, which the GitHub
+# action does on pull requests), a removed claim or a changed expectation
+# or needle is a weakening. true fails the gate on it; false only records it.
+fail_on_weakened = true
 
 [receipts]
 # Where receipts, the register and evidence packs are written.
@@ -83,15 +94,35 @@ max_output_bytes = 20000
 """
 
 
+def render_config(required: list[str]) -> str:
+    return DEFAULT_CONFIG_TEMPLATE.replace("{required}", json.dumps(required))
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     target = Path(args.config).resolve()
     if target.exists() and not args.force:
         print(f"{target} already exists; use --force to overwrite", file=sys.stderr)
         return EXIT_USAGE
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+    root = target.parent
+    root.mkdir(parents=True, exist_ok=True)
+    starters = detect_starter_claims(root)
+    required = [c.claim_id for c in starters if c.claim_id == "tests-pass"]
+    target.write_text(render_config(required), encoding="utf-8")
     print(f"wrote {target}")
-    print("next: create claims.toml declaring what is true about this repo, then run: countersign verify")
+
+    claims_target = root / "claims.toml"
+    if claims_target.exists():
+        print(f"kept existing {claims_target}")
+    else:
+        claims_target.write_text(render_claims_toml(starters), encoding="utf-8")
+        print(f"wrote {claims_target}")
+    for claim in starters:
+        print(f"  proposed claim {claim.claim_id}: {claim.command}  (from {claim.source})")
+    if not starters:
+        print("  no build files recognised; claims.toml holds a commented example to edit")
+    if required:
+        print(f"  required in countersign.toml: {', '.join(required)}")
+    print("next: review claims.toml, then run: countersign verify")
     return EXIT_OK
 
 
@@ -134,7 +165,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         return EXIT_FAIL
 
     try:
-        result = run_gate(config, register=register)
+        result = run_gate(config, register=register, claims_base=args.claims_base or None)
     except (ConfigError, ClaimsError) as exc:
         print(f"verification could not run: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -198,6 +229,38 @@ def _cmd_reproduce(args: argparse.Namespace) -> int:
     return EXIT_OK if reproduced else EXIT_FAIL
 
 
+def _cmd_claims_diff(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).resolve()
+    if not config_path.exists():
+        print(f"no config at {config_path}", file=sys.stderr)
+        return EXIT_USAGE
+    config = _load_config(config_path)
+    if config is None:
+        return EXIT_USAGE
+    if not config.claims_file:
+        print("no claims file is configured; nothing to diff", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        head = load_claims(config.claims_path())
+        changes, problem = diff_against_ref(config.root, args.base, config.claims_file, head)
+    except ClaimsError as exc:
+        print(f"claims diff could not run: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    if problem:
+        print(f"note: {problem}; every current claim is shown as added")
+    if not changes:
+        print(f"claims unchanged against {args.base}")
+        return EXIT_OK
+    weakened = [c for c in changes if c.weakened]
+    print(f"{len(changes)} change(s) against {args.base}, {len(weakened)} weakened")
+    for change in changes:
+        flag = "WEAKENED " if change.weakened else ""
+        print(f"  {flag}{change.kind} {change.claim_id}: {change.detail}")
+    if weakened and config.fail_on_weakened:
+        return EXIT_FAIL
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="countersign",
@@ -218,6 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("--no-claims", action="store_true", help="run the marker scan only; skip the claims check (reported as skipped)")
     p_verify.add_argument("--no-color", action="store_true", help="disable colored output")
     p_verify.add_argument("--summary-file", default=None, help="also write a Markdown summary to this path")
+    p_verify.add_argument("--claims-base", default=None, metavar="REF", help="git revision to diff the claims file against; weakened claims fail the gate unless the config says otherwise")
     p_verify.set_defaults(func=_cmd_verify)
 
     p_check = sub.add_parser("check", help="verify the evidence register's hash chain")
@@ -228,6 +292,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_repro.add_argument("--config", default="countersign.toml", help="config path (default: countersign.toml)")
     p_repro.add_argument("--run", required=True, help="run id from the receipt filename")
     p_repro.set_defaults(func=_cmd_reproduce)
+
+    p_claims = sub.add_parser("claims", help="work with the claims file")
+    claims_sub = p_claims.add_subparsers(dest="claims_command", required=True)
+    p_diff = claims_sub.add_parser("diff", help="what changed in the claims file against a git revision, weakenings named")
+    p_diff.add_argument("--config", default="countersign.toml", help="config path (default: countersign.toml)")
+    p_diff.add_argument("--base", required=True, metavar="REF", help="git revision to compare with, for example origin/main")
+    p_diff.set_defaults(func=_cmd_claims_diff)
 
     return parser
 

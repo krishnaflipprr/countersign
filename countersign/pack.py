@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
-from .claims import FAIL, PASS, TIMEOUT
+from .claims import PASS
 from .engine import FAIL_VERDICT, TEST_EXCLUSION_NOTE, GateResult
 from .receipt import commit_label
 from .stubscan import RULES
@@ -34,6 +34,11 @@ NOT_COVERED_ALWAYS: tuple[str, ...] = (
     "responsibility; Countersign records what they did.",
     "Line exemptions are honored in the source itself and counted here. Each one is a human "
     "decision that a finding was a false positive; audit them like any other review decision.",
+    "The register this pack cites lives on the machine that ran the checks. It proves that no "
+    "entry was altered after it was written by anyone who did not also rewrite every entry after "
+    "it. On its own that is evidence against accident and against third parties, not against "
+    "the machine's owner; evidence against the owner requires the register head to be anchored "
+    "outside the machine.",
 )
 
 NOT_COVERED_TESTS_EXCLUDED = (
@@ -102,7 +107,7 @@ def build_pack(result: GateResult, path: Path) -> Path:
             f"""<tr>
                   <td class="mono {_esc('verdict-pass' if c.status == PASS else 'verdict-fail')}">{_esc(c.status.upper())}</td>
                   <td>{_esc(c.statement)}</td>
-                  <td class="mono">{_esc(c.command)}</td>
+                  <td class="mono">{_esc(c.command or 'none declared')}</td>
                   <td class="mono">{_esc(c.exit_code if c.exit_code is not None else 'n/a')}</td>
                   <td class="mono faint">{_esc(f"{c.duration_ms} ms")}</td>
                 </tr>"""
@@ -117,18 +122,42 @@ def build_pack(result: GateResult, path: Path) -> Path:
             </tr>"""
         for rule in RULES
     ) + """
-        <tr><td class="mono">empty-body</td><td>functions whose body does nothing (Python, structural)</td>
+        <tr><td class="mono">empty-body</td><td>functions whose body does nothing (structural: Python via ast, TypeScript and JavaScript via a comment-and-string-aware scan)</td>
             <td class="mono">{}</td></tr>
         <tr><td class="mono">unparseable</td><td>Python files the parser rejects (Python, structural)</td>
             <td class="mono">{}</td></tr>
-        <tr><td class="mono">claims</td><td>each declared claim's disproof command was executed and judged as declared</td>
+        <tr><td class="mono">claims</td><td>each declared claim's disproof command was executed and judged as declared; a claim the config requires but the file omits counts as failed</td>
+            <td class="mono">{}</td></tr>
+        <tr><td class="mono">claims-diff</td><td>claims compared with the base revision, when one was given; weakened claims counted here</td>
             <td class="mono">{}</td></tr>
       """.format(
         len([f for f in result.findings if f.rule_id == "empty-body"]),
         len([f for f in result.findings if f.rule_id == "unparseable"]),
         len(result.failed_claims),
+        len(result.weakened_claims) if result.claims_diff is not None else "n/a",
     )
 
+    if result.claims_diff is None:
+        diff_section = ""
+    else:
+        diff_rows = "\n".join(
+            f"""<tr>
+                  <td class="mono">{_esc(c.claim_id)}</td>
+                  <td class="mono">{_esc(c.kind)}</td>
+                  <td class="mono {_esc('verdict-fail' if c.weakened else '')}">{_esc('YES' if c.weakened else 'no')}</td>
+                  <td class="mono faint">{_esc(c.detail)}</td>
+                </tr>"""
+            for c in result.claims_diff
+        ) or '<tr><td colspan="4" class="faint">No claim changed.</td></tr>'
+        diff_section = f"""
+<h2>Claims changed against {_esc(result.claims_base)}</h2>
+<p class="faint">The claims file was compared with the one at the base revision. A removed claim, a
+changed expectation or a changed needle is a weakening; a changed command is listed for review.</p>
+<table>
+  <tr><th>Claim</th><th>Change</th><th>Weakened</th><th>Detail</th></tr>
+  {diff_rows}
+</table>
+"""
     not_covered = NOT_COVERED_ALWAYS + ((NOT_COVERED_TESTS_EXCLUDED,) if result.tests_excluded else ())
     # The test exclusion is stated in the not-covered list above when it
     # applies, so the run note that says the same thing is not repeated.
@@ -171,6 +200,7 @@ def build_pack(result: GateResult, path: Path) -> Path:
   {claim_rows}
 </table>
 
+{diff_section}
 <h2>How it was checked</h2>
 <table>
   <tr><th>Check</th><th>What it detects</th><th>Findings</th></tr>

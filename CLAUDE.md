@@ -47,6 +47,7 @@ python3 -m unittest discover -s tests -t .   # tests
 python3 -m countersign verify                # the gate on this repo
 python3 -m countersign verify --config demo/countersign.toml   # must FAIL (planted defects)
 python3 -m countersign check                 # register chain
+python3 -m countersign claims diff --base HEAD   # claims governance on this repo
 ```
 
 The demo failing its own gate is a claim in claims.toml; if the demo ever
@@ -64,10 +65,16 @@ Both were production-certified file by file; this repo inherits that
 standard. New files are production-grade the day they land: real data flow
 end to end, no markers, and it runs.
 
+## Decisions taken (2026-09-03)
+
+- License: Apache-2.0 for everything in this repository (LICENSE, NOTICE).
+  Hosted anchoring, badges and organisation features are a separate,
+  proprietary service; nothing in this repository may depend on it or be
+  switched off without it.
+- Package name on PyPI: `countersign-cli` (the bare name is taken). The
+  import package and the command stay `countersign`.
+- Repository stays private until the hosted service is ready.
+
 ## Open decisions (Krishna's call)
 
-- License for public launch (permissive OSS vs source-available). LICENSE is
-  a placeholder until decided.
-- Package name availability on PyPI and the GitHub org name, before launch.
-- Pricing shape of the eventual hosted receipts service; nothing here
-  depends on it.
+- Pricing shape of the hosted receipts service; nothing here depends on it.

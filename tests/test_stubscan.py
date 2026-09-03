@@ -28,7 +28,11 @@ def exempted_line():
 BANNER_TS = '''export function betaBanner(): string {
   return "Coming soon";
 }
+
+export function sendInvoice(orderId: string): void {}
 '''
+
+DECLARATIONS_D_TS = "export declare function sendInvoice(orderId: string): void;\nexport function noBody(): void {}\n"
 
 OVERLOAD_PY = '''from typing import overload
 
@@ -107,6 +111,20 @@ class TestStubScan(unittest.TestCase):
     def test_finds_coming_soon_in_typescript(self):
         findings, _exemptions, _inert, _files = scan_tree(self.config)
         self.assertTrue(any(f.rule_id == "coming-soon" and f.path == "src/banner.ts" for f in findings))
+
+    def test_finds_empty_body_in_typescript(self):
+        findings, _exemptions, _inert, _files = scan_tree(self.config)
+        hits = [(f.line, f.evidence) for f in findings if f.rule_id == "empty-body" and f.path == "src/banner.ts"]
+        self.assertEqual(hits, [(5, "export function sendInvoice(orderId: string): void {}")])
+
+    def test_typescript_empty_body_honours_exemption(self):
+        findings, exemptions, _inert, _files = self._scan_single("hook.ts", "export function onIdle(): void {}  // countersign: exempt\n")
+        self.assertEqual(findings, [])
+        self.assertEqual(exemptions, 1)
+
+    def test_declaration_files_are_not_structurally_checked(self):
+        findings, _exemptions, _inert, _files = self._scan_single("types.d.ts", DECLARATIONS_D_TS)
+        self.assertEqual(findings, [])
 
     def test_overloads_are_not_reported(self):
         findings, _exemptions, _inert, _files = scan_tree(self.config)
