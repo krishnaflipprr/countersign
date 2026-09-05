@@ -8,6 +8,7 @@ Five verbs, no config ceremony to start:
   countersign check                   verify the evidence register's chain
   countersign reproduce --run ID      re-derive a recorded run
   countersign claims diff --base REF  what changed in the claims file, weakenings named
+  countersign claims from-report F    propose claims from an agent's own "done" message
 
 Exit codes: 0 clean or reproduced, 1 the work did not pass (or the register
 is damaged, or the run did not reproduce), 2 usage error (including a config
@@ -31,6 +32,7 @@ from .pack import build_pack
 from .receipt import markdown_summary, receipt_json, terminal_summary, write_receipt
 from .claimsdiff import diff_against_ref
 from .register import Register, RegisterDamaged
+from .reportclaims import claims_from_report, render_proposals_toml, without_ids
 from .reproduce import reproduce_run
 from .starter import WORKFLOW_RELATIVE_PATH, detect_github_repository, detect_starter_claims, render_claims_toml, render_workflow
 
@@ -294,6 +296,57 @@ def _cmd_claims_diff(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_claims_from_report(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).resolve()
+    config = _load_config(config_path)
+    if config is None:
+        return EXIT_USAGE
+    if args.report == "-":
+        text = sys.stdin.read()
+    else:
+        report_path = Path(args.report)
+        if not report_path.is_file():
+            print(f"no report at {report_path}", file=sys.stderr)
+            return EXIT_USAGE
+        text = report_path.read_text(encoding="utf-8", errors="replace")
+
+    proposals = claims_from_report(text, config.root)
+    for item in proposals.unresolved:
+        print(f"unresolved: \"{item.sentence}\": {item.reason}")
+    if not proposals.claims:
+        print("nothing checkable was found in the report: no sentence about tests, build, lint, types, a file or a URL with a command that can be derived from this repository", file=sys.stderr)
+        return EXIT_FAIL
+
+    print(f"{len(proposals.claims)} claim(s) proposed from the report:")
+    print(render_proposals_toml(proposals))
+    if not args.write:
+        print("run again with --write to append them to the claims file")
+        return EXIT_OK
+
+    claims_target = config.root / (config.claims_file or "claims.toml")
+    existing: set[str] = set()
+    if claims_target.exists():
+        try:
+            existing = {c.claim_id for c in (load_claims(claims_target) or [])}
+        except ClaimsError as exc:
+            print(f"cannot append to {claims_target}: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+    fresh = without_ids(proposals, existing)
+    for claim_id in sorted(set(p.claim.claim_id for p in proposals.claims) & existing):
+        print(f"skipped {claim_id}: already declared in {claims_target.name}")
+    if not fresh.claims:
+        print("nothing new to write")
+        return EXIT_OK
+    block = render_proposals_toml(fresh)
+    if claims_target.exists():
+        current = claims_target.read_text(encoding="utf-8")
+        claims_target.write_text(current + ("" if current.endswith("\n") or not current else "\n") + "\n" + block, encoding="utf-8")
+    else:
+        claims_target.write_text("# Claims proposed from the agent's own report by countersign claims from-report.\n\n" + block, encoding="utf-8")
+    print(f"wrote {len(fresh.claims)} claim(s) to {claims_target}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="countersign",
@@ -334,6 +387,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff.add_argument("--config", default="countersign.toml", help="config path (default: countersign.toml)")
     p_diff.add_argument("--base", required=True, metavar="REF", help="git revision to compare with, for example origin/main")
     p_diff.set_defaults(func=_cmd_claims_diff)
+
+    p_report = claims_sub.add_parser("from-report", help="propose claims from an agent's completion message (a file, or - for stdin)")
+    p_report.add_argument("report", help="path to the agent's report, or - to read standard input")
+    p_report.add_argument("--config", default="countersign.toml", help="config path (default: countersign.toml)")
+    p_report.add_argument("--write", action="store_true", help="append the proposed claims to the claims file; existing ids are kept as they are")
+    p_report.set_defaults(func=_cmd_claims_from_report)
 
     return parser
 

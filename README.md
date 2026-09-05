@@ -63,6 +63,7 @@ The agent that wrote the code can also write the claims, and the quiet way past 
 
 - **Required claims.** `required = ["tests-pass"]` in `countersign.toml` names claim ids that must be declared. A required claim nobody wrote is recorded as `MISSING` and fails the gate, so deleting the claim is not a way out.
 - **Claims diff.** `countersign verify --claims-base origin/main` (the GitHub action does this on every pull request) compares `claims.toml` with the base branch and names every change. A removed claim, a changed expectation or a changed needle is a weakening and fails the gate (`fail_on_weakened = true`); a changed command is listed for the reviewer. `countersign claims diff --base origin/main` prints the same diff on its own.
+- **Claims from the agent's own report.** `countersign claims from-report done.md` (or `-` for standard input) turns the checkable sentences of an agent's completion message into proposed claims: "all tests pass" becomes the repository's test command, "created src/pricing.ts" becomes a file check, a URL becomes a request that must succeed. The agent's own sentence is kept as the statement, so the receipt later says which promise held. Deterministic English patterns; a sentence whose command cannot be derived from the repository is reported as unresolved, never guessed. `--write` appends them to `claims.toml`.
 - **Starter claims.** `countersign init` reads the build files that are actually there (package.json scripts, pytest or ruff configuration, go.mod, Cargo.toml) and writes a `claims.toml` with the stack's own test, lint and type-check commands, marking `tests-pass` as required. Nothing is guessed; a repository with no recognised build files gets a commented example.
 
 ## The marker scan
@@ -75,7 +76,7 @@ Point `paths` at production source (the original gate covered `src/`, the dashbo
 
 - Every run appends to `.countersign/register.jsonl`: an append-only, hash-chained log. Edit any earlier line and `countersign check` says so. Appends are locked, so two runs on one checkout cannot break the chain by racing.
 - What the register proves, exactly: that no entry was altered after it was written by anyone who did not also rewrite every entry after it. It lives on the machine that ran the checks, so on its own it is evidence against accident and against third parties, not against the machine's owner. Tamper evidence against the owner requires the register head to be anchored outside the machine, which is what a hosted anchoring service is for.
-- Every run writes a JSON receipt and, unless asked not to, a single-file HTML evidence pack: what was checked, how, what was found, what was not covered. Receipts name the git commit and say whether the working tree had uncommitted changes when it was scanned.
+- Every run writes a JSON receipt and, unless asked not to, a single-file HTML evidence pack: what was checked, how, what was found, what was not covered. The pack and the Markdown summary open with the result in plain words, written for the person who asked the agent for the feature rather than for the engineer reading the tables. Receipts name the git commit and say whether the working tree had uncommitted changes when it was scanned.
 - `countersign reproduce --run <id>` re-derives a recorded run from the same inputs and compares, result for result. The run recorded the SHA-256 of the config and claims files it read; if they changed, you are told.
 
 Exit codes: 0 countersigned or reproduced, 1 not countersigned (or the register is damaged, or the run did not reproduce), 2 usage error including a config or claims file that cannot be honoured as written, 130 interrupted.
@@ -105,7 +106,7 @@ When the repository's origin is on github.com, `countersign init` also writes `.
     config: countersign.toml
 ```
 
-The action runs Countersign straight from its checkout (no pip install, nothing fetched from PyPI). The verdict lands in the job step summary; receipts upload as artifacts. Set `fail-on: warn` to record without failing. If your config moves the receipts directory, set `receipts-dir` to match. Workflows run on the account that owns the repository, on its Actions minutes.
+The action runs Countersign straight from its checkout (no pip install, nothing fetched from PyPI). The verdict lands in the job step summary; receipts upload as artifacts. Set `fail-on: warn` to record without failing. If your config moves the receipts directory, set `receipts-dir` to match. Set `attest: true` to sign the receipt with GitHub Artifact Attestations; that is free for public repositories on every plan, while private repositories need GitHub Enterprise Cloud, and the job must grant `id-token: write` and `attestations: write`. Workflows run on the account that owns the repository, on its Actions minutes.
 
 ## What Countersign is not
 

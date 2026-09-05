@@ -20,6 +20,7 @@ from pathlib import Path
 from . import __version__
 from .claims import PASS
 from .engine import FAIL_VERDICT, TEST_EXCLUSION_NOTE, GateResult
+from .plain import plain_sentences
 from .receipt import commit_label
 from .stubscan import RULES
 
@@ -158,6 +159,7 @@ changed expectation or a changed needle is a weakening; a changed command is lis
   {diff_rows}
 </table>
 """
+    plain = "\n".join(f"  <li>{_esc(sentence)}</li>" for sentence in plain_sentences(result))
     not_covered = NOT_COVERED_ALWAYS + ((NOT_COVERED_TESTS_EXCLUDED,) if result.tests_excluded else ())
     # The test exclusion is stated in the not-covered list above when it
     # applies, so the run note that says the same thing is not repeated.
@@ -182,6 +184,11 @@ changed expectation or a changed needle is a weakening; a changed command is lis
   <span class="faint">Config (SHA-256)</span><span>{_esc(result.config_sha256)}</span>
   <span class="faint">Claims file (SHA-256)</span><span>{_esc(result.claims_sha256 or 'none read; the claims check was skipped')}</span>
 </div>
+
+<h2>In plain words</h2>
+<ul>
+{plain}
+</ul>
 
 <h2>What was found</h2>
 <div class="counts">

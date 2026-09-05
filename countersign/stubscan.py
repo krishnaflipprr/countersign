@@ -56,24 +56,25 @@ class Rule:
     rule_id: str
     pattern: "re.Pattern[str]"
     why: str
+    plain: str  # the same finding, in words for someone who did not write the rule
 
 
-def _rule(rule_id: str, source: str, flags: int, why: str) -> Rule:
-    return Rule(rule_id, re.compile(source, flags), why)
+def _rule(rule_id: str, source: str, flags: int, why: str, plain: str) -> Rule:
+    return Rule(rule_id, re.compile(source, flags), why, plain)
 
 
 RULES: list[Rule] = [
-    _rule("unfinished-marker", r"\b(TODO|FIXME|XXX|HACK)\b", 0, "unfinished-work marker; finish the work or record the question where the team keeps them"),  # countersign: exempt
-    _rule("not-implemented", r"not (yet implemented|implemented yet)", re.IGNORECASE, "the code declares itself unimplemented"),
-    _rule("not-implemented-error", r"\b(raise|throw)\s+(new\s+)?NotImplemented(Error|Exception)\b", 0, "raises instead of doing the work"),
-    _rule("deferred-implementation", r"implemented (later|in a future)", re.IGNORECASE, "defers the implementation"),
-    _rule("stub-word", r"\bstub(bed)?\b", re.IGNORECASE, "unfinished stand-in code"),  # countersign: exempt
-    _rule("fabricated-data", r"(fake|dummy|mock|sample|placeholder|hardcoded|hard-coded) (data|value|values|response|result|results|payload)", re.IGNORECASE, "fabricated values standing in for a real query or API call"),
-    _rule("simplified-implementation", r"(simplified|simplistic) (implementation|version|approach)", re.IGNORECASE, "a deliberately incomplete implementation"),
-    _rule("real-implementation-deferred", r"in (a )?real (implementation|system|world|deployment)", re.IGNORECASE, "describes what production would do instead of doing it"),
-    _rule("would-be-done", r"would be (implemented|replaced|fetched|queried)", re.IGNORECASE, "describes work not done"),
-    _rule("coming-soon", r"coming soon", re.IGNORECASE, "a feature advertised as absent"),  # countersign: exempt
-    _rule("empty-return-standin", r"return (\[\]|\{\}|None|null)\s*(#|//)\s*(TODO|placeholder|stub|for now)", re.IGNORECASE, "returns empty as a stand-in for a real result"),  # countersign: exempt
+    _rule("unfinished-marker", r"\b(TODO|FIXME|XXX|HACK)\b", 0, "unfinished-work marker; finish the work or record the question where the team keeps them", "a note left for later instead of finished work"),  # countersign: exempt
+    _rule("not-implemented", r"not (yet implemented|implemented yet)", re.IGNORECASE, "the code declares itself unimplemented", "code that declares itself unfinished"),
+    _rule("not-implemented-error", r"\b(raise|throw)\s+(new\s+)?NotImplemented(Error|Exception)\b", 0, "raises instead of doing the work", "code that raises an error instead of doing the work"),
+    _rule("deferred-implementation", r"implemented (later|in a future)", re.IGNORECASE, "defers the implementation", "code that says the work will be done another time"),
+    _rule("stub-word", r"\bstub(bed)?\b", re.IGNORECASE, "unfinished stand-in code", "code marked as a stand-in"),  # countersign: exempt
+    _rule("fabricated-data", r"(fake|dummy|mock|sample|placeholder|hardcoded|hard-coded) (data|value|values|response|result|results|payload)", re.IGNORECASE, "fabricated values standing in for a real query or API call", "made-up data standing in for a real result"),
+    _rule("simplified-implementation", r"(simplified|simplistic) (implementation|version|approach)", re.IGNORECASE, "a deliberately incomplete implementation", "a deliberately incomplete version"),
+    _rule("real-implementation-deferred", r"in (a )?real (implementation|system|world|deployment)", re.IGNORECASE, "describes what production would do instead of doing it", "a description of what the real thing would do, instead of doing it"),
+    _rule("would-be-done", r"would be (implemented|replaced|fetched|queried)", re.IGNORECASE, "describes work not done", "a description of work not done"),
+    _rule("coming-soon", r"coming soon", re.IGNORECASE, "a feature advertised as absent", "text announcing a feature that is not there"),  # countersign: exempt
+    _rule("empty-return-standin", r"return (\[\]|\{\}|None|null)\s*(#|//)\s*(TODO|placeholder|stub|for now)", re.IGNORECASE, "returns empty as a stand-in for a real result", "an empty result returned as a stand-in"),  # countersign: exempt
 ]
 
 

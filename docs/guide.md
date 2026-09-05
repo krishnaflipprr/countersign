@@ -58,6 +58,8 @@ When the work passes its own declared checks, the run is countersigned. This is 
 
 Notice what the receipt says without being asked: that the working tree had uncommitted changes, that test files were excluded by policy, and that two exemption markers sit on lines no rule flags. A skipped check is always printed as skipped, never folded into a pass.
 
+Every pack and every Markdown summary opens with the result in plain words: "Not countersigned: 3 places in the code look unfinished; 1 claim out of 1 did not hold." followed by one sentence per problem, written for the person who asked for the feature.
+
 ## 4. The evidence pack
 
 Every run writes a single HTML file under `.countersign/receipts/` that opens anywhere and prints to PDF. It is the thing you hand to someone else: what was checked, how, what was found, and what was not covered.
@@ -82,6 +84,8 @@ required = ["tests-pass"]
 ```
 
 A required claim that is not declared is recorded as `MISSING` and fails the gate.
+
+**Claims from the agent's report.** Save the agent's final message and run `countersign claims from-report done.md`. Sentences such as "all tests pass", "created src/pricing.ts" or a URL become proposed claims with commands derived from your repository; the agent's sentence is kept as the statement. Add `--write` to append them to `claims.toml`. Sentences that cannot be turned into a command are listed as unresolved with the reason.
 
 **Claims diff.** Compare the claims file with any git revision:
 

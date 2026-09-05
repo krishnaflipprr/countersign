@@ -21,6 +21,7 @@ from pathlib import Path
 from . import __version__
 from .claims import FAIL, MISSING, PASS, TIMEOUT
 from .engine import FAIL_VERDICT, GateResult
+from .plain import plain_sentences
 
 STATUS_MARK = {PASS: "PASS", FAIL: "FAIL", TIMEOUT: "TIMEOUT", MISSING: "MISSING"}
 
@@ -138,6 +139,8 @@ def markdown_summary(result: GateResult) -> str:
     lines: list[str] = []
     verdict_word = "COUNTERSIGNED" if result.verdict != FAIL_VERDICT else "NOT COUNTERSIGNED"
     lines.append(f"## Countersign: {verdict_word}")
+    lines.append("")
+    lines.append(" ".join(plain_sentences(result)))
     lines.append("")
     lines.append("| | |")
     lines.append("|---|---|")

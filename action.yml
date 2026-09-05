@@ -22,6 +22,10 @@ inputs:
     description: "Git revision to diff the claims file against. Empty means the pull request's base branch on pull_request events and no diff otherwise."
     required: false
     default: ""
+  attest:
+    description: "true signs the receipt JSON with GitHub Artifact Attestations (Sigstore). Free for public repositories on every plan; private repositories need GitHub Enterprise Cloud. The calling job must grant permissions id-token: write and attestations: write."
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -67,6 +71,14 @@ runs:
         elif [ "$status" -ne 0 ]; then
           echo "::warning::Countersign could not run, exit $status: see the step log (fail-on=warn, workflow continues)"
         fi
+
+    - name: Attest the receipt
+      if: inputs.attest == 'true'
+      uses: actions/attest@v4
+      with:
+        subject-path: ${{ inputs.receipts-dir }}/receipts/*.json
+        predicate-type: https://getcountersign.me/receipt/v1
+        predicate: '{"tool": "countersign"}'
 
     - name: Upload receipts
       if: always()
