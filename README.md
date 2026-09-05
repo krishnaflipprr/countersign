@@ -123,7 +123,7 @@ Expected outcome: NOT COUNTERSIGNED, four findings listed, the false claim caugh
 
 ## Status and roadmap
 
-v0.1. Working: marker scan, structural empty-body check (Python, TypeScript, JavaScript), claims protocol with required claims and claims diff, register, receipts, evidence packs, reproduce, CI action, starter config and workflow from `init`. Next: wiring cross-checks (frontend fields against the backend endpoints that feed them), agent-report parsing (verify the claims in an agent's own completion message), public receipt badges, hosted receipt verification. The regulated-industry lineage (EU AI Act Article 12 record-keeping evidence) is the same engine pointed at a different buyer.
+v0.1. Working: marker scan, structural empty-body check (Python, TypeScript, JavaScript), claims protocol with required claims and claims diff, register, receipts, evidence packs, reproduce, CI action, starter config and workflow from `init`. Next: wiring cross-checks (frontend fields against the backend endpoints that feed them), agent-report parsing (verify the claims in an agent's own completion message), public receipt badges, hosted receipt verification. The register and evidence-pack engine is shared with Gaigentic Verify, which applies it to regulated finance decisions; Countersign itself makes no regulatory claim.
 
 ## License
 
