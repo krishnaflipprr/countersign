@@ -81,7 +81,7 @@ end to end, no markers, and it runs.
 ## Releasing
 
 The workflow that `countersign init` writes points customers at
-`krishnaflipprr/countersign@v0.1` (constant `ACTION_REF` in starter.py). Tags:
+`krishnaflipprr/countersign@v0.2` (constant `ACTION_REF` in starter.py). Tags:
 `v0.1.N` are fixed; `v0.1` moves to the latest 0.1.x. A release is: bump
 `__version__` and pyproject, tag `v0.1.N`, move `v0.1`, push both. Pushing
 the `v0.1.N` tag runs `.github/workflows/release.yml`, which tests, gates,

@@ -20,7 +20,7 @@ TESTS_PASS = "tests-pass"
 
 # Where customers' workflows point. Moves only with a release; the tag it
 # names must exist on that repository before this constant changes.
-ACTION_REF = "krishnaflipprr/countersign@v0.1"
+ACTION_REF = "krishnaflipprr/countersign@v0.2"
 WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "countersign.yml"
 
 
