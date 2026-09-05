@@ -87,10 +87,16 @@ def load_claims(path: Path | None) -> list[Claim] | None:
 def parse_claims(data: bytes | str, source_name: str = "claims.toml") -> list[Claim]:
     """Parse the text of a claims file. Raises ClaimsError for anything that
     cannot be honoured as written."""
-    if isinstance(data, str):
-        data = data.encode("utf-8")
+    if isinstance(data, bytes):
+        try:
+            # TOML is UTF-8 by definition; a byte order mark is tolerated,
+            # anything undecodable is refused rather than silently repaired,
+            # because a repaired byte inside a command would change what runs.
+            data = data.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ClaimsError(f"{source_name} is not valid UTF-8: {exc}") from None
     try:
-        raw = tomllib.loads(data.decode("utf-8", errors="replace"))
+        raw = tomllib.loads(data)
     except tomllib.TOMLDecodeError as exc:
         raise ClaimsError(f"{source_name} is not valid TOML: {exc}") from None
     declared: Any = raw.get("claim", [])

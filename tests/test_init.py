@@ -44,6 +44,12 @@ class TestInit(unittest.TestCase):
         claims = {c.claim_id: c.command for c in load_claims(self.root / "claims.toml")}
         self.assertEqual(claims, {"tests-pass": "pnpm test", "lint-clean": "pnpm run lint", "types-check": "npx tsc --noEmit"})
 
+    def test_bun_runs_the_package_script_not_its_own_runner(self):
+        (self.root / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}), encoding="utf-8")
+        (self.root / "bun.lock").write_text("", encoding="utf-8")
+        claims = {c.claim_id: c.command for c in detect_starter_claims(self.root)}
+        self.assertEqual(claims, {"tests-pass": "bun run test"})
+
     def test_python_repository_with_pytest(self):
         (self.root / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths = ['tests']\n[tool.ruff]\nline-length = 100\n", encoding="utf-8")
         code, _output = self._init()

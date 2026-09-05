@@ -18,6 +18,9 @@ FLAGGED = {
     "exported arrow with return type": ("export const load = (): Promise<void> => {\n};\n", [(1, "load")]),
     "getter": ("class A {\n  get total(): number {}\n}\n", [(2, "total")]),
     "exported function expression": ("export const donothing = function () {};\n", [(1, "donothing")]),
+    "empty object type then an empty body": ("class A {\n  f(): {} {}\n}\n", [(2, "f")]),
+    "exported generic arrow": ("export const id = <T,>(x: T) => {};\n", [(1, "id")]),
+    "exported arrow with typed binding": ("export const h: Handler = async (req) => {};\n", [(1, "h")]),
     "two in one file": ("function a() {}\nfunction b() { return 1; }\nfunction c() {}\n", [(1, "a"), (3, "c")]),
 }
 
@@ -41,6 +44,11 @@ NOT_FLAGGED = {
     "interface methods": "interface Reader {\n  read(): string;\n  close(): void;\n}\n",
     "declare function": "declare function load(): void;\n",
     "empty object type as return type": "function shape(): {} { return build(); }\n",
+    "interface method returning the empty object type": "interface R {\n  read(): {};\n}\n",
+    "union with the empty object type": "function shape(): {} | null { return build(); }\n",
+    "array of object type": "function rows(): { a: number }[] { return []; }\n",
+    "exported ternary holding an empty arrow": "export const handler = isTest ? () => {} : real;\n",
+    "exported arrow whose body has code": "export const load = async (): Promise<void> => { await go(); };\n",
     "empty class": "export class Marker {}\n",
     "empty interface and namespace": "interface Empty {}\nnamespace N {}\nenum E {}\n",
     "call followed by block on next line": "log(\n  x\n);\n{\n}\n",

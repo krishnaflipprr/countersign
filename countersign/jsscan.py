@@ -14,8 +14,8 @@ an agent leaves behind when it declares a function and never writes it:
 
 Only a body that is empty before blanking counts: a block holding nothing
 but a comment is a documented no-op, which is a decision, not unfinished
-work (and whatever the comment admits is the marker rules' business). The check is
-tuned to never fire on honest code:
+work (and whatever the comment admits is the marker rules' business). The
+check is tuned to never fire on honest code:
 
 - constructors are skipped (parameter properties make an empty body normal),
 - Angular lifecycle hooks (``ngOnInit`` and friends) are skipped,
@@ -55,6 +55,7 @@ _IDENT = r"[A-Za-z_$][\w$]*"
 _FUNCTION_DECL = re.compile(r"\bfunction\b\s*(\*)?\s*(" + _IDENT + r")?\s*(?=[<(])")
 _METHOD_LINE = re.compile(r"^[ \t]*((?:(?:" + "|".join(sorted(MODIFIERS)) + r")\s+)*)(" + _IDENT + r")\s*(?=[<(])", re.MULTILINE)
 _EXPORTED_ARROW = re.compile(r"\bexport\s+(?:const|let|var)\s+(" + _IDENT + r")\b")
+_IDENT_AT = re.compile(_IDENT)
 
 # Characters after which a ``/`` begins a regular expression literal rather
 # than a division. Good enough for blanking; a wrong guess only affects
@@ -161,10 +162,8 @@ def _mask_template(source: str, out: list[str], start: int, depths: list[int], *
     closing an expression when resuming). Returns the index after it."""
     n = len(source)
     i = start + 1
-    if not resume:
-        pass
-    else:
-        out[start] = " "
+    if resume:
+        out[start] = " "  # the ``}`` that closed the expression
     while i < n:
         c = source[i]
         if c == "\\":
@@ -239,13 +238,15 @@ def _body_after_signature(text: str, i: int) -> tuple[int, int] | None:
 
 
 def _skip_type(text: str, i: int) -> int:
-    """Skip a type annotation, returning the index of the body's ``{``.
+    """Skip a type annotation, returning the index of the body's ``{`` or
+    ``len(text)`` when the signature has no body.
 
-    Types can contain braces (object types); the body brace is the first
-    ``{`` at bracket depth zero whose block is followed by something other
-    than another ``{``, or the first one at depth zero after a non-type
-    token. In practice: take the first depth-zero ``{``; if the text after
-    its matching ``}`` is another ``{``, the first was the type.
+    Types can contain braces (object types), so the first depth-zero ``{``
+    is not necessarily the body. What follows its matching ``}`` decides:
+    another ``{`` means the first was a type and the body comes next; a
+    type continuation (``|``, ``&``, ``[]``, ``=>``) means keep skipping;
+    a terminator (``;`` ``,`` ``)`` ``>`` ``=``) means the signature ended
+    without a body, as in an interface method returning ``{}``.
     """
     n = len(text)
     depth = 0
@@ -258,13 +259,19 @@ def _skip_type(text: str, i: int) -> int:
         elif c == "{" and depth == 0:
             close = _matching(text, i)
             if close < 0:
-                return i
+                return n
             after = _skip_space(text, close + 1)
-            if after < n and text[after] == "{":
+            following = text[after] if after < n else ""
+            if following == "{":
                 return after
+            if following in ("|", "&", "[") or text.startswith("=>", after):
+                i = close + 1
+                continue
+            if following in (";", ",", ")", ">", "="):
+                return n
             return i
-        elif c in ";\n" and depth == 0 and c == ";":
-            return i
+        elif c == ";" and depth == 0:
+            return n
         i += 1
     return n
 
@@ -340,22 +347,76 @@ def _expression_name(text: str, function_index: int) -> str | None:
 
 
 def _arrow_body(text: str, i: int) -> tuple[int, int] | None:
-    """From just after an exported binding's name, find ``=> {`` at depth
-    zero within the statement and return its block."""
+    """From just after an exported binding's name, the block of the arrow
+    function the binding is initialised with, or None when the initialiser
+    is not itself an arrow function (a call, a ternary, an object).
+
+    Shape accepted: ``[: type] = [async] [<generics>] (params) | ident
+    [: return type] => {``. Anything else is not this rule's business.
+    """
     n = len(text)
     depth = 0
     while i < n:
         c = text[i]
-        if c in "([":
+        if c in "([{":
             depth += 1
-        elif c in ")]":
+        elif c in ")]}":
             depth -= 1
-        elif c == "{" and depth == 0:
-            return None  # a block or object before any arrow: not an arrow function
         elif c == ";" and depth == 0:
             return None
-        elif c == "=" and depth == 0 and i + 1 < n and text[i + 1] == ">":
-            j = _skip_space(text, i + 2)
-            return _block_at(text, j)
+        elif c == "=" and depth == 0:
+            if text.startswith("=>", i):  # an arrow inside the binding's type annotation
+                i += 2
+                continue
+            break
+        i += 1
+    else:
+        return None
+    j = _skip_space(text, i + 1)
+    if text.startswith("async", j) and j + 5 < n and text[j + 5].isspace():
+        j = _skip_space(text, j + 5)
+    if j < n and text[j] == "<":
+        close = _matching(text, j)
+        if close < 0:
+            return None
+        j = _skip_space(text, close + 1)
+    if j < n and text[j] == "(":
+        close = _matching(text, j)
+        if close < 0:
+            return None
+        j = _skip_space(text, close + 1)
+    else:
+        ident = _IDENT_AT.match(text, j)
+        if not ident:
+            return None
+        j = _skip_space(text, ident.end())
+    if j < n and text[j] == ":":
+        arrow = _return_type_end(text, j + 1)
+        if arrow is None:
+            return None
+        j = arrow
+    if not text.startswith("=>", j):
+        return None
+    return _block_at(text, _skip_space(text, j + 2))
+
+
+def _return_type_end(text: str, i: int) -> int | None:
+    """Index of the ``=>`` that ends an arrow function's return type, or
+    None when the statement ends first."""
+    n = len(text)
+    depth = 0
+    while i < n:
+        c = text[i]
+        if text.startswith("=>", i):
+            if depth == 0:
+                return i
+            i += 2
+            continue
+        if c in "([{<":
+            depth += 1
+        elif c in ")]}>":
+            depth -= 1
+        elif c == ";" and depth == 0:
+            return None
         i += 1
     return None

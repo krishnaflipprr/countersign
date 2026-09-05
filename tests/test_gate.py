@@ -58,6 +58,7 @@ def fetch_items():
 """
 
 LABEL_TS = "export const label = `fake data` + 'until billing lands';\n"
+DOUBLE_BACKTICK_PY = 'def note():\n    """Uses ``fake data`` until the feed lands."""\n    return 1\n'
 
 
 class TestGate(unittest.TestCase):
@@ -166,6 +167,13 @@ class TestGate(unittest.TestCase):
         self.assertTrue(any(f.path == "src/label.ts" for f in result.findings))
         summary = markdown_summary(result)
         self.assertIn("`` export const label = `fake data`", summary)
+
+    def test_markdown_fence_grows_past_double_backticks_in_evidence(self):
+        (self.root / "src" / "note.py").write_text(DOUBLE_BACKTICK_PY, encoding="utf-8")
+        result = run_gate(self.config)
+        summary = markdown_summary(result)
+        self.assertIn("``` ", summary)
+        self.assertIn("``fake data``", summary)
 
     @unittest.skipUnless(shutil.which("git"), "git is not installed")
     def test_git_state_is_recorded_honestly(self):

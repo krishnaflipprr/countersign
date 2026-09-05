@@ -116,10 +116,13 @@ def _node_claims(root: Path) -> list[StarterClaim]:
     if not isinstance(scripts, dict):
         return []
     manager = _package_manager(root)
-    run = f"{manager} run" if manager != "npm" else "npm run"
+    run = f"{manager} run"
+    # `bun test` is bun's own runner, not the package's test script; every
+    # other manager treats `<manager> test` as the script.
+    test_command = "bun run test" if manager == "bun" else f"{manager} test"
     claims: list[StarterClaim] = []
     if isinstance(scripts.get("test"), str) and scripts["test"].strip():
-        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", f"{manager} test", "package.json scripts.test"))
+        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", test_command, "package.json scripts.test"))
     if isinstance(scripts.get("lint"), str) and scripts["lint"].strip():
         claims.append(StarterClaim("lint-clean", "The linter reports nothing", f"{run} lint", "package.json scripts.lint"))
     for name in ("typecheck", "type-check", "tsc"):

@@ -146,6 +146,15 @@ class TestLoadClaims(unittest.TestCase):
         with self.assertRaises(ClaimsError):
             load_claims(self.path)
 
+    def test_invalid_utf8_is_refused_not_repaired(self):
+        self.path.write_bytes(b'[[claim]]\nid = "a"\nstatement = "A"\ncommand = "echo \xff"\n')
+        with self.assertRaises(ClaimsError):
+            load_claims(self.path)
+
+    def test_byte_order_mark_is_accepted(self):
+        self.path.write_bytes("\ufeff".encode("utf-8") + b'[[claim]]\nid = "a"\nstatement = "A"\ncommand = "true"\n')
+        self.assertEqual([c.claim_id for c in load_claims(self.path)], ["a"])
+
     def test_bad_timeout_is_a_claims_error(self):
         self._write('[[claim]]\nid = "a"\nstatement = "A"\ncommand = "true"\ntimeout_s = "soon"\n')
         with self.assertRaises(ClaimsError):

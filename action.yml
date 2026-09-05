@@ -62,8 +62,10 @@ runs:
         if [ "$status" -ne 0 ] && [ "$COUNTERSIGN_FAIL_ON" != "warn" ]; then
           exit "$status"
         fi
-        if [ "$status" -ne 0 ]; then
-          echo "::warning::Countersign verdict: NOT COUNTERSIGNED, exit $status (fail-on=warn, workflow continues)"
+        if [ "$status" -eq 1 ]; then
+          echo "::warning::Countersign verdict: NOT COUNTERSIGNED (fail-on=warn, workflow continues)"
+        elif [ "$status" -ne 0 ]; then
+          echo "::warning::Countersign could not run, exit $status: see the step log (fail-on=warn, workflow continues)"
         fi
 
     - name: Upload receipts

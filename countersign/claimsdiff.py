@@ -32,7 +32,6 @@ REMOVED = "removed"
 CHANGED = "changed"
 
 WEAKENING_FIELDS = ("expect", "needle")
-REVIEW_FIELDS = ("command",)
 
 
 @dataclass(frozen=True)
@@ -64,19 +63,26 @@ def claims_text_at(root: Path, ref: str, claims_file: str) -> bytes | None:
     target = (Path(root).resolve() / claims_file).resolve()
     if not target.is_relative_to(toplevel):
         raise ClaimsError(f"cannot read claims at {ref}: {target} is outside the repository {toplevel}")
-    spec = f"{ref}:{target.relative_to(toplevel).as_posix()}"
+    relative = target.relative_to(toplevel).as_posix()
+    # ls-tree answers "does this path exist at that revision" with its exit
+    # code and output alone, so no error message has to be parsed (git
+    # localises its messages).
+    listed = _git_bytes(toplevel, ref, "ls-tree", ref, "--", relative)
+    if listed.returncode != 0:
+        raise ClaimsError(f"cannot read claims at {ref}: {listed.stderr.decode('utf-8', errors='replace').strip() or 'not a valid revision'}")
+    if not listed.stdout.strip():
+        return None
+    shown = _git_bytes(toplevel, ref, "show", f"{ref}:{relative}")
+    if shown.returncode != 0:
+        raise ClaimsError(f"cannot read claims at {ref}: {shown.stderr.decode('utf-8', errors='replace').strip() or 'git show failed'}")
+    return shown.stdout
+
+
+def _git_bytes(cwd: Path, ref: str, *args: str) -> subprocess.CompletedProcess[bytes]:
     try:
-        shown = subprocess.run(
-            ["git", "show", spec], cwd=str(toplevel), capture_output=True, timeout=30,
-        )
+        return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ClaimsError(f"cannot read claims at {ref}: {exc}") from None
-    if shown.returncode == 0:
-        return shown.stdout
-    message = shown.stderr.decode("utf-8", errors="replace").strip()
-    if "does not exist" in message or "exists on disk, but not in" in message:
-        return None
-    raise ClaimsError(f"cannot read claims at {ref}: {message or 'git show failed'}")
 
 
 def diff_claims(base: list[Claim] | None, head: list[Claim] | None) -> list[ClaimChange]:
@@ -94,7 +100,8 @@ def diff_claims(base: list[Claim] | None, head: list[Claim] | None) -> list[Clai
         if before is not None and after is None:
             changes.append(ClaimChange(claim_id, REMOVED, (), True, f"removed: {before.statement}"))
             continue
-        assert before is not None and after is not None
+        if before is None or after is None:
+            continue  # unreachable: the id came from one of the two sides
         fields = tuple(
             name for name in ("statement", "command", "expect", "needle", "timeout_s")
             if getattr(before, name) != getattr(after, name)

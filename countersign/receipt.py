@@ -15,6 +15,7 @@ is printed as a skip. A receipt that overstates is worse than no receipt.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from . import __version__
@@ -35,11 +36,14 @@ def commit_label(result: GateResult) -> str:
 def _code_span(text: str) -> str:
     """A Markdown code span that survives backticks and newlines in ``text``.
 
-    Evidence lines from TypeScript carry template literals; commands can be
-    multi-line TOML strings. A single-backtick span would break the table.
+    Evidence lines carry template literals and reStructuredText ``code``;
+    commands can be multi-line TOML strings. The fence is one backtick
+    longer than the longest run inside, which is the CommonMark rule.
     """
     flat = " ".join(text.split())
-    return f"`` {flat} ``"
+    longest_run = max((len(run) for run in re.findall(r"`+", flat)), default=0)
+    fence = "`" * (longest_run + 1)
+    return f"{fence} {flat} {fence}"
 
 
 def receipt_json(result: GateResult) -> dict:

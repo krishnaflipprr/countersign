@@ -84,7 +84,7 @@ Exit codes: 0 countersigned or reproduced, 1 not countersigned (or the register 
 
 ```bash
 pip install countersign-cli
-countersign init         # writes countersign.toml and a starter claims.toml
+countersign init         # writes countersign.toml, a starter claims.toml and, on GitHub, the workflow
 countersign verify       # scan + claims gate; writes receipt, pack, register
 countersign check        # the register's hash chain
 countersign reproduce --run <id>
@@ -123,7 +123,7 @@ Expected outcome: NOT COUNTERSIGNED, four findings listed, the false claim caugh
 
 ## Status and roadmap
 
-v0.1. Working: marker scan, structural Python check, claims protocol, register, receipts, evidence packs, reproduce, CI action. Next: wiring cross-checks (frontend fields against the backend endpoints that feed them), agent-report parsing (verify the claims in an agent's own completion message), public receipt badges, hosted receipt verification. The regulated-industry lineage (EU AI Act Article 12 record-keeping evidence) is the same engine pointed at a different buyer.
+v0.1. Working: marker scan, structural empty-body check (Python, TypeScript, JavaScript), claims protocol with required claims and claims diff, register, receipts, evidence packs, reproduce, CI action, starter config and workflow from `init`. Next: wiring cross-checks (frontend fields against the backend endpoints that feed them), agent-report parsing (verify the claims in an agent's own completion message), public receipt badges, hosted receipt verification. The regulated-industry lineage (EU AI Act Article 12 record-keeping evidence) is the same engine pointed at a different buyer.
 
 ## License
 
