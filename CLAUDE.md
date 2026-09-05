@@ -91,6 +91,24 @@ workflow release.yml, environment pypi). A PyPI version can never be
 re-uploaded, so a broken release means a new patch number, never a force.
 The action must never point at a tag that does not exist.
 
+## Product decisions (2026-09-03)
+
+- Two segments from day one, vibe coders first: people using Lovable,
+  Bolt, Replit, Cursor or Claude Code who cannot run a CLI or edit CI.
+  For them the product is the hosted side: install the GitHub App, it
+  opens the setup pull request, every change gets a verdict, a
+  plain-English receipt arrives, history is kept where the agent cannot
+  edit it. Engineering teams get the same App plus org policy and a
+  dashboard.
+- The open CLI stays complete and free. It never depends on the hosted
+  service. Anything the CLI can render (plain-English summary, claims
+  proposed from an agent's own report by deterministic patterns) lives in
+  the CLI; the model-assisted version of report parsing is hosted.
+- GitHub Artifact Attestations are free and belong in the open action; the
+  hosted service does not sell "anchoring" as such.
+
 ## Open decisions (Krishna's call)
 
-- Pricing shape of the hosted receipts service; nothing here depends on it.
+- Pricing (low monthly self-serve for individuals, per repo or seat for
+  teams); nothing here depends on it.
+- Domain for the hosted service.
