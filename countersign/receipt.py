@@ -93,6 +93,7 @@ def receipt_json(result: GateResult) -> dict:
             ]
         ),
         "claims_status": result.claims_status,
+        "plain": plain_sentences(result),
         "claims_diff": (
             None
             if result.claims_diff is None

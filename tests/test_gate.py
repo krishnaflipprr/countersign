@@ -297,8 +297,9 @@ class TestGate(unittest.TestCase):
     def test_receipt_json_shape(self):
         result = run_gate(self.config)
         payload = receipt_json(result)
-        for key in ("run_id", "verdict", "config", "scan", "findings", "claims", "register", "notes", "git_commit", "git_dirty"):
+        for key in ("run_id", "verdict", "config", "scan", "findings", "claims", "register", "notes", "git_commit", "git_dirty", "plain"):
             self.assertIn(key, payload)
+        self.assertTrue(payload["plain"][0].startswith("Not countersigned"), payload["plain"])
 
 
 if __name__ == "__main__":
