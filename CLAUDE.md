@@ -73,7 +73,7 @@ end to end, no markers, and it runs.
   switched off without it.
 - Package name on PyPI: `countersign-cli` (the bare name is taken). The
   import package and the command stay `countersign`.
-- Repository stays private until the hosted service is ready.
+- Repository public since 2026-09-05; the engine is published in full.
 - Hosted at github.com/krishnaflipprr/countersign (decided 2026-09-03).
 
 ## Releasing
