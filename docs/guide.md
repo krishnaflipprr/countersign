@@ -183,7 +183,7 @@ dir = ".countersign"
 
 [run]
 timeout_s = 300                    # per claim; a timed-out claim fails, and its process tree is killed
-max_output_bytes = 20000           # characters of command output kept on the receipt, after redaction
+max_output_bytes = 20000           # bytes of command output kept on the receipt, after redaction
 output = "excerpt"                 # "none" keeps only the exit code
 ```
 

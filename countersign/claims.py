@@ -318,10 +318,16 @@ def missing_claim(claim_id: str) -> ClaimResult:
 
 
 def _truncate(text: str, limit: int) -> str:
-    if len(text) <= limit:
+    """Keep at most ``limit`` bytes of UTF-8, from both ends, with the middle
+    cut out. Measured in bytes so the config key means what it says; a cut
+    never lands inside a multibyte character."""
+    data = text.encode("utf-8")
+    if len(data) <= limit:
         return text
     half = limit // 2
-    return text[:half] + f"\n... [{len(text) - limit} characters truncated] ...\n" + text[-half:]
+    head = data[:half].decode("utf-8", errors="ignore")
+    tail = data[len(data) - half:].decode("utf-8", errors="ignore")
+    return head + f"\n... [{len(data) - limit} bytes truncated] ...\n" + tail
 
 
 def _decode(data: bytes | None) -> str:

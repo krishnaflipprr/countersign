@@ -104,9 +104,9 @@ dir = ".countersign"
 # Per-claim command timeout, seconds. A claim that runs longer is killed,
 # with everything it spawned, and recorded as timed out.
 timeout_s = 300
-# How much captured command output a receipt keeps, in characters. Longer
-# output is kept from both ends with the middle cut out. Credential-shaped
-# values are replaced with [redacted] before anything is kept.
+# How much captured command output a receipt keeps, in bytes of UTF-8.
+# Longer output is kept from both ends with the middle cut out.
+# Credential-shaped values are replaced with [redacted] before anything is kept.
 max_output_bytes = 20000
 # "excerpt" keeps command output on the receipt as evidence; "none" keeps
 # only the exit code.

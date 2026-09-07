@@ -166,3 +166,17 @@ class TestLoadClaims(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OutputLimitIsBytes(unittest.TestCase):
+    """max_output_bytes means bytes: the key says so, and a cut never lands inside a character."""
+
+    def test_truncates_on_utf8_bytes_not_characters(self) -> None:
+        from countersign.claims import _truncate
+        text = "é" * 100  # 200 bytes, 100 characters
+        kept = _truncate(text, 60)
+        self.assertIn("140 bytes truncated", kept)
+        self.assertEqual(len(kept.encode("utf-8")) - len("\n... [140 bytes truncated] ...\n".encode("utf-8")), 60)
+        self.assertEqual(_truncate("plain", 60), "plain")
+        self.assertNotIn("\ufffd", _truncate("a" + "é" * 50, 61), "a cut on a byte boundary drops the split character rather than mangling it")
+
