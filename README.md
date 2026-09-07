@@ -1,9 +1,63 @@
 <!-- audited on 20260903 -->
 # Countersign
 
-**Your agent signs. Countersign proves it.**
+Countersign checks whether the work a coding agent says it finished was actually finished, and keeps a record of the answer that the agent cannot edit.
 
-Agents report work as done that was never done. A plausible final message becomes the record of what was verified, and nobody can tell the difference between "the tests passed" and "the agent said the tests passed". Countersign is the difference: a deterministic gate that makes every completion claim falsifiable, runs the disproof commands itself, and writes a tamper-evident receipt.
+It is two things:
+
+- **A GitHub App** for people who do not want to touch a terminal. Install it, merge one pull request, and every change to your repository gets a verdict in plain words. Hosted at [getcountersign.me](https://getcountersign.me).
+- **A command line tool**, in this repository, for people who want to run the same checks themselves. Free, open source, no dependencies.
+
+Both use the same engine. Nothing in the verdict involves an AI model.
+
+## The problem
+
+Coding agents (Cursor, Claude Code, Lovable, Bolt, Replit and the rest) finish a task and tell you "Done. All tests pass." Sometimes that is true. Sometimes the code has a `TODO` where the real work should be, returns made-up numbers, or has a function whose body is empty. The agent's message looks the same either way, and reading the code to find out takes longer than asking the agent did.
+
+The agent cannot be the one that certifies its own work. Something outside the agent has to check.
+
+## What Countersign does
+
+On every push and every pull request, in your own GitHub Actions:
+
+1. **Scans the code for unfinished work.** Eleven kinds of marker agents leave behind (a note for later, made-up data standing in for a real result, "not implemented yet", "coming soon"), plus functions whose body does nothing and explains nothing. Each finding names the file and line.
+2. **Runs your claims.** A claim is a sentence about the work paired with the command that would fail if the sentence were false. "The test suite passes" is checked by running the tests. "The pricing endpoint answers" is checked by calling it. The command's exit code decides.
+3. **Writes a receipt.** The verdict in plain words, every finding with the line as evidence, every claim as declared and as judged, sealed into a hash-chained log. The GitHub App also keeps a copy outside the repository, where the agent that wrote the code cannot reach it.
+
+The verdict is either **countersigned** or **not countersigned**, and the receipt always says why.
+
+## Use it without a terminal: the GitHub App
+
+1. Open [github.com/apps/countersignapp](https://github.com/apps/countersignapp) and click Install. Pick the repositories.
+2. Within a few seconds Countersign opens a pull request in each repository titled "Add Countersign: verify every change, in plain words". It adds three small files and nothing else: the workflow, a configuration, and starter claims read from what is already in the repository (the test script in package.json, a pytest configuration, go.mod, Cargo.toml).
+3. Merge that pull request.
+4. From then on, every push and pull request gets:
+   - a check named `countersign` on the commit,
+   - a comment on the pull request, updated in place on later runs,
+   - a receipt page, reachable by a link only you have.
+
+A comment looks like this, unedited, from a pull request where the agent had left a note for later, a made-up price and an empty function:
+
+> Not countersigned: 3 places in the code look unfinished.
+> src/pricing.js line 1: a note left for later instead of finished work.
+> src/pricing.js line 3: made-up data standing in for a real result.
+> src/pricing.js line 6: a function that does nothing.
+> 1 other claim held: 'The full test suite passes'.
+
+Public repositories are free. Private repositories need a plan: USD 9 a month for a personal account, USD 20 a month for an organisation, covering every private repository of that account. Details at [getcountersign.me/pricing](https://getcountersign.me/pricing).
+
+## Use it from the command line
+
+Requires Python 3.11 or newer. No dependencies, standard library only.
+
+```bash
+pip install countersign-cli
+cd your-repository
+countersign init      # writes countersign.toml, claims.toml and, on GitHub, the workflow
+countersign verify    # scans the code, runs the claims, writes the receipt
+```
+
+`countersign verify` prints the verdict and exits 0 when countersigned, 1 when not. Example output:
 
 ```
 $ countersign verify
@@ -24,19 +78,39 @@ NOT COUNTERSIGNED · 3 finding(s), 1 failed claim(s)
 The work did not pass its own declared checks. Fix the code or the claims.
 ```
 
-## Why this exists
+The other commands:
 
-Three things became true at once in 2026:
+```bash
+countersign check                        # the receipt log's hash chain, and its head hash
+countersign check --expect-head <hash>   # fail unless the head matches a value you pinned elsewhere
+countersign reproduce --run <id>         # re-run a recorded run from the same inputs and compare
+countersign claims diff --base origin/main   # what changed in claims.toml against a branch
+countersign claims from-report done.md   # propose claims from an agent's own "done" message
+```
 
-1. Most new code is written by agents, and agents report success for work that was never finished, plausibly and at scale.
-2. Teams ship that code anyway, because "looks done" and "is done" stopped being distinguishable by reading a pull request.
-3. Vendors bolted self-verification onto their own agents, which is the fox counting the chickens. An audit trail written by the system being audited proves what the system says it did. Independence is structural, not a feature.
+It also runs without installing anything: `PYTHONPATH=/path/to/countersign python3 -m countersign verify`.
 
-Countersign is independent by construction: it runs outside the agent, checks deterministically, records everything to a hash-chained register, and refuses to countersign work that did not pass its own declared checks. No model judgement participates in any verdict.
+The full guide, with a screenshot of every command, is in [docs/guide.md](docs/guide.md).
 
-## The claims protocol
+## Use it in GitHub Actions by hand
 
-An agent (or a human) declares what is true about the work in `claims.toml`. Each claim carries the command that fails if the claim is false:
+If the repository's origin is on github.com, `countersign init` writes `.github/workflows/countersign.yml` for you. To add it to an existing workflow instead:
+
+```yaml
+- uses: krishnaflipprr/countersign@v0.2
+  with:
+    config: countersign.toml     # default
+    fail-on: fail                # or warn: record the verdict without failing the job
+    receipts-dir: .countersign   # must match [receipts] dir in the config
+    claims-base: ""              # git revision to diff claims against; pull requests use their base by default
+    attest: "false"              # true signs the receipt with GitHub Artifact Attestations
+```
+
+The action runs the engine straight from its checkout; nothing is fetched from a package index during the run. The verdict lands in the job summary and the receipts upload as an artifact named `countersign-receipts`. Attestation is free for public repositories on every GitHub plan; private repositories need GitHub Enterprise Cloud, and the job must grant `id-token: write` and `attestations: write`.
+
+## Writing claims
+
+Claims live in `claims.toml`. Each one is a statement plus the command that fails if the statement is false.
 
 ```toml
 [[claim]]
@@ -53,80 +127,74 @@ expect = "output contains"
 needle = "unit_price"
 ```
 
-If nobody can say what command would disprove the claim, the claim was not a claim. Three expectations are supported: `exit 0`, `nonzero exit` (negative tests), and `output contains`. A claim may carry only `id`, `statement`, `command`, `expect`, `needle` and `timeout_s`; any other key is refused with exit code 2 rather than ignored, because a misspelled `expct` would silently drop the claim back to `exit 0` and pass. A claim that runs past its timeout is killed together with everything it spawned and recorded as timed out, which fails the gate.
+Rules:
 
-Claim commands run through your shell, in the repository root, with your privileges. Treat `claims.toml` like any other executable file in the repository: review changes to it the way you review changes to CI configuration.
+- **Three expectations.** `exit 0`: the command must succeed. `nonzero exit`: the command must fail (for "the old endpoint is gone"). `output contains`: the output must contain `needle`.
+- **Only these keys.** `id`, `statement`, `command`, `expect`, `needle`, `timeout_s`. Any other key is refused with exit code 2 and a did-you-mean suggestion, because a misspelled `expct` would otherwise silently drop the claim back to `exit 0` and pass.
+- **Timeouts.** A claim that runs past `timeout_s` (default 300 seconds) is killed together with everything it started and recorded as timed out, which fails the run.
+- **Commands run with your privileges**, in the repository root, through your shell. Review changes to `claims.toml` the way you review changes to CI configuration.
 
-## Who guards the claims
+### Who guards the claims
 
-The agent that wrote the code can also write the claims, and the quiet way past a gate is not to fix the code but to soften the claim. Three things make that visible:
+The agent that wrote the code can also edit the claims, and the quiet way past a gate is to soften the claim rather than fix the code. Three things make that visible:
 
-- **Required claims.** `required = ["tests-pass"]` in `countersign.toml` names claim ids that must be declared. A required claim nobody wrote is recorded as `MISSING` and fails the gate, so deleting the claim is not a way out.
-- **Claims diff.** `countersign verify --claims-base origin/main` (the GitHub action does this on every pull request) compares `claims.toml` with the base branch and names every change. A removed claim, a changed expectation or a changed needle is a weakening and fails the gate (`fail_on_weakened = true`); a command swapped for one that cannot fail (`true`, `:`, a bare `echo`) is a weakening too, since nothing can disprove a command that always exits 0; any other changed command is listed for the reviewer. `countersign claims diff --base origin/main` prints the same diff on its own.
-- **Claims from the agent's own report.** `countersign claims from-report done.md` (or `-` for standard input) turns the checkable sentences of an agent's completion message into proposed claims: "all tests pass" becomes the repository's test command, "created src/pricing.ts" becomes a file check, a URL becomes a request that must succeed. The agent's own sentence is kept as the statement, so the receipt later says which promise held. Deterministic English patterns; a sentence whose command cannot be derived from the repository is reported as unresolved, never guessed. `--write` appends them to `claims.toml`.
-- **Starter claims.** `countersign init` reads the build files that are actually there (package.json scripts, pytest or ruff configuration, go.mod, Cargo.toml) and writes a `claims.toml` with the stack's own test, lint and type-check commands, marking `tests-pass` as required. Nothing is guessed; a repository with no recognised build files gets a commented example.
+- **Required claims.** `required = ["tests-pass"]` in `countersign.toml` names claim ids that must exist. A required claim nobody declared is recorded as `MISSING` and fails the run.
+- **The claims diff.** On every pull request (and with `--claims-base` locally) the claims file is compared with the base branch. A removed claim, a changed expectation, a changed needle, or a command swapped for one that cannot fail (`true`, `:`, `exit 0`, a bare `echo`) is a weakening and fails the run. Any other command change is listed for the reviewer.
+- **Claims from the agent's report.** `countersign claims from-report done.md` (or `-` for standard input) turns the checkable sentences of an agent's completion message into proposed claims: "all tests pass" becomes the repository's test command, "created src/pricing.ts" becomes a file check, a URL becomes a request that must succeed. Fixed English patterns, not a model; a sentence whose command cannot be derived is reported as unresolved, never guessed. `--write` appends the proposals to `claims.toml`.
 
-## The marker scan
+## What the scan looks for
 
-Eleven rules ported from a gate that ran daily on a production tree of more than 500 source files, reviewed file by file, with zero false positives, plus a structural check for functions whose body does nothing and explains nothing, which catches unfinished work that forgot to advertise itself. A bare `pass`, `...` or `{}` is a stub; the same body with a docstring or a comment is a documented decision (an irreversible migration's `downgrade`, a `close()` with nothing to close) and is not reported. Python is checked through the parser (overloads, abstract and Protocol methods are exempt). TypeScript and JavaScript are checked by a comment-and-string-aware scan of function declarations, class and object methods, and exported arrow functions (constructors, Angular lifecycle hooks, unexported callbacks, `.d.ts` and minified files are exempt). The eleven marker rules apply to every language in scope.
+Eleven rules, ported from a gate that ran daily on a production codebase of more than five hundred source files with zero false positives, plus one structural check:
 
-Point `paths` at production source (the original gate covered `src/`, the dashboard and the clients, not seed scripts or migrations); prose about stubs in a seed script is not a stub. Test files are excluded by policy: test code legitimately fabricates data, and the receipt says so. A genuine false positive is exempted in the source itself, on the line, where a reviewer sees it. Every exemption that suppressed a finding is counted on the receipt; a marker that suppresses nothing is reported as inert so a stale one cannot hide.
+| The receipt says | What was found |
+|---|---|
+| a note left for later instead of finished work | TODO, FIXME, XXX or HACK |
+| code that declares itself unfinished | "not yet implemented", "not implemented yet" |
+| code that raises an error instead of doing the work | raise or throw NotImplementedError |
+| code that says the work will be done another time | "implemented later", "implemented in a future" |
+| code marked as a stand-in | the word stub or stubbed |
+| made-up data standing in for a real result | fake, dummy, mock, sample, placeholder or hardcoded data, value, response, result or payload |
+| a deliberately incomplete version | "simplified implementation" and the like |
+| a description of what the real thing would do | "in a real implementation", "in the real world" |
+| a description of work not done | "would be implemented", "would be fetched" |
+| text announcing a feature that is not there | "coming soon" |
+| an empty result returned as a stand-in | an empty return with a comment saying TODO, placeholder or "for now" |
+| a function that does nothing | a body that is only `pass`, `...` or `{}` with no docstring or comment explaining why |
 
-## Receipts, register, reproduce
+Python is checked through the parser; overloads, abstract methods and Protocol methods are exempt. TypeScript and JavaScript are checked by a scan that understands comments, strings, template literals and regular expressions; constructors, Angular lifecycle hooks, unexported callbacks, `.d.ts` and minified files are exempt. The word rules apply to every language in scope: Python, TypeScript, JavaScript, Go, Rust, Ruby, Java, Kotlin, Swift, PHP, C# and Scala by default.
 
-- Every run appends to `.countersign/register.jsonl`: an append-only, hash-chained log. Edit any earlier line and `countersign check` says so. `check` prints the head hash; pin it somewhere the machine does not control and pass it back as `countersign check --expect-head <hash>` to catch entries dropped from the end, which a hash chain alone cannot show. Appends are locked, so two runs on one checkout cannot break the chain by racing.
-- What the register proves, exactly: that no entry was altered after it was written by anyone who did not also rewrite every entry after it. It lives on the machine that ran the checks, so on its own it is evidence against accident and against third parties, not against the machine's owner. Tamper evidence against the owner requires the register head to be anchored outside the machine, which is what a hosted anchoring service is for.
-- Every run writes a JSON receipt and, unless asked not to, a single-file HTML evidence pack: what was checked, how, what was found, what was not covered. The pack and the Markdown summary open with the result in plain words, written for the person who asked the agent for the feature rather than for the engineer reading the tables. Receipts name the git commit and say whether the working tree had uncommitted changes when it was scanned.
-- `countersign reproduce --run <id>` re-derives a recorded run from the same inputs and compares, result for result. The run recorded the SHA-256 of the config and claims files it read; if they changed, you are told.
+Test files are excluded by default, because test code legitimately fabricates data, and the receipt says so. A genuine false positive is exempted on the line itself with `countersign: exempt`; every exemption that suppressed a finding is counted on the receipt, and a marker that suppresses nothing is reported as inert.
 
-Exit codes: 0 countersigned or reproduced, 1 not countersigned (or the register is damaged, or the run did not reproduce), 2 usage error including a config or claims file that cannot be honoured as written, 130 interrupted.
+## Receipts, the register, reproduce
 
-## Install and run
+- Every run writes a JSON receipt, a single-file HTML evidence pack and a Markdown summary into `.countersign/`. All three open with the result in plain words. Receipts name the git commit and say whether the working tree had uncommitted changes.
+- Every run appends one line to `.countersign/register.jsonl`, each carrying the hash of the line before it. Edit any earlier line and `countersign check` says so. What this proves, exactly: that no entry was altered in place. It cannot show entries dropped from the end, so `check` prints the head hash; pin it somewhere the machine does not control and pass it back with `--expect-head` to catch that too. The GitHub App keeps a copy of every receipt outside the repository for the same reason.
+- `countersign reproduce --run <id>` re-derives a recorded run from the same inputs and compares, result for result. If the configuration or claims file changed since, you are told.
 
-```bash
-pip install countersign-cli
-countersign init         # writes countersign.toml, a starter claims.toml and, on GitHub, the workflow
-countersign verify       # scan + claims gate; writes receipt, pack, register
-countersign check        # the register's hash chain, and its head hash
-countersign check --expect-head <hash>
-countersign reproduce --run <id>
-countersign claims diff --base origin/main
-```
-
-The user guide, with screenshots of every command and the evidence pack, is in [docs/guide.md](docs/guide.md).
-
-Requires Python 3.11+. Zero dependencies, standard library only, on purpose: it has to run inside any CI runner, any locked-down laptop, any air-gapped environment, with no supply-chain conversation. It also runs without installing: `PYTHONPATH=/path/to/countersign python3 -m countersign verify`.
-
-## CI usage (GitHub Actions)
-
-When the repository's origin is on github.com, `countersign init` also writes `.github/workflows/countersign.yml`. Commit it and push; from then on every push to the default branch and every pull request runs Countersign, and pull requests get the claims diff against their base branch. The file it writes is this:
-
-```yaml
-- uses: krishnaflipprr/countersign@v0.2
-  with:
-    config: countersign.toml
-```
-
-The action runs Countersign straight from its checkout (no pip install, nothing fetched from PyPI). The verdict lands in the job step summary; receipts upload as artifacts. Set `fail-on: warn` to record without failing. If your config moves the receipts directory, set `receipts-dir` to match. Set `attest: true` to sign the receipt with GitHub Artifact Attestations; that is free for public repositories on every plan, while private repositories need GitHub Enterprise Cloud, and the job must grant `id-token: write` and `attestations: write`. Workflows run on the account that owns the repository, on its Actions minutes.
+Exit codes: 0 countersigned or reproduced; 1 not countersigned, register damaged, or not reproduced; 2 usage error, including a configuration or claims file that cannot be honoured as written; 130 interrupted.
 
 ## What Countersign is not
 
-Not a security scanner, not a code review, not a statement of fitness for any purpose. It verifies declared claims deterministically and scans for unfinished-work markers. The evidence pack states its own limits on every page.
+Not a security scanner, not a code review, and not a statement that software is fit for any purpose. A countersigned verdict means exactly that the declared checks passed and no marker matched, nothing more. You remain responsible for your code and your claims. The evidence pack states its own limits on every page.
 
-## Try the demo
+## Try it on planted defects
 
-The `demo/` directory is a small accounts service with defects planted in it: a marker comment, fabricated return data, a function that raises instead of doing work, a body that does nothing, plus one true claim and one false one.
+The `demo/` directory is a small service with defects planted in it: a marker comment, fabricated return data, a function that raises instead of doing work, a body that does nothing, one true claim and one false one.
 
 ```bash
 countersign verify --config demo/countersign.toml
 ```
 
-Expected outcome: NOT COUNTERSIGNED, four findings listed, the false claim caught.
+Expected outcome: NOT COUNTERSIGNED, four findings listed, the false claim caught. This repository's own claims file requires the demo to fail; if the demo ever passed, the repository's own run would fail.
 
-## Status and roadmap
+## Documentation and support
 
-v0.1. Working: marker scan, structural empty-body check (Python, TypeScript, JavaScript), claims protocol with required claims and claims diff, register, receipts, evidence packs, reproduce, CI action, starter config and workflow from `init`. Next: wiring cross-checks (frontend fields against the backend endpoints that feed them), agent-report parsing (verify the claims in an agent's own completion message), public receipt badges, hosted receipt verification. The register and evidence-pack engine is shared with Gaigentic Verify, which applies it to regulated finance decisions; Countersign itself makes no regulatory claim.
+- User guide with screenshots: [docs/guide.md](docs/guide.md)
+- Hosted service, pricing, terms and privacy: [getcountersign.me](https://getcountersign.me)
+- Questions and problems: [open an issue](https://github.com/krishnaflipprr/countersign/issues) or write to help@getcountersign.me
 
-## License
+## License and origins
 
-Apache License 2.0 (see LICENSE and NOTICE). The command line tool, every scan rule, the claims protocol, the register, receipts, packs and reproduce are open source in full and stay fully functional offline. Hosted anchoring, badges and organisation features are a separate service.
+Apache License 2.0 (see LICENSE and NOTICE). The command line tool, every scan rule, the claims protocol, the register, receipts, packs and reproduce are open source in full and work offline without the hosted service. The hosted App is a separate service and the engine never depends on it.
+
+The scan rules and their tuning come from a gate that ran daily on a production codebase. The register, reproduce and evidence-pack patterns come from Gaigentic Verify, which applies the same engine to decisions in regulated finance. Countersign itself makes no regulatory claim.
