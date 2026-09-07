@@ -26,11 +26,13 @@ class TestDiffClaims(unittest.TestCase):
         changes = diff_claims([_c("a", expect="output contains", needle="unit_price")], [_c("a", expect="output contains", needle="{")])
         self.assertTrue(changes[0].weakened)
 
-    def test_command_change_is_reported_for_review_not_as_weakening(self):
+    def test_command_change_is_a_weakening_by_default_and_a_note_by_policy(self):
         changes = diff_claims([_c("a", command="npm test")], [_c("a", command="npm test -- --passWithNoTests")])
         self.assertEqual(changes[0].fields, ("command",))
-        self.assertFalse(changes[0].weakened)
+        self.assertTrue(changes[0].weakened, "a changed proof needs a person to approve it")
         self.assertIn("npm test", changes[0].detail)
+        relaxed = diff_claims([_c("a", command="npm test")], [_c("a", command="npm test -- --passWithNoTests")], command_change_weakens=False)
+        self.assertFalse(relaxed[0].weakened)
 
     def test_no_base_file_means_everything_added(self):
         changes = diff_claims(None, [_c("a")])

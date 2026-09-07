@@ -115,15 +115,21 @@ class NeuteredCommandIsAWeakening(unittest.TestCase):
         self.assertTrue(changes[0].weakened)
         self.assertIn("always succeeds", changes[0].detail)
 
-    def test_no_op_to_real_command_is_not_weakened(self) -> None:
-        changes = diff_claims(self._claims("true"), self._claims("npm test"))
+    def test_no_op_to_real_command_is_not_weakened_under_the_note_policy(self) -> None:
+        changes = diff_claims(self._claims("true"), self._claims("npm test"), command_change_weakens=False)
         self.assertEqual(len(changes), 1)
         self.assertFalse(changes[0].weakened)
 
-    def test_one_real_command_to_another_stays_a_reviewer_note(self) -> None:
-        changes = diff_claims(self._claims("npm test"), self._claims("pytest -q"))
+    def test_one_real_command_to_another_is_a_note_only_under_the_note_policy(self) -> None:
+        changes = diff_claims(self._claims("npm test"), self._claims("pytest -q"), command_change_weakens=False)
         self.assertEqual(len(changes), 1)
         self.assertFalse(changes[0].weakened)
+
+    def test_shell_wrappers_cannot_turn_a_claim_green_by_default(self) -> None:
+        for wrapper in ("pytest || true", "pytest; true", "if pytest; then true; else true; fi", "pytest 2>/dev/null || :", "(pytest) || exit 0"):
+            with self.subTest(wrapper=wrapper):
+                changes = diff_claims(self._claims("pytest"), self._claims(wrapper))
+                self.assertTrue(changes[0].weakened, "the engine does not read shell; any changed command needs approval")
 
 
 if __name__ == "__main__":

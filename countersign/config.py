@@ -14,13 +14,38 @@ reason; it never degrades into a scan of nothing that then passes.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
+import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 DEFAULT_EXEMPT_MARKER = "countersign: exempt"
+
+# Every section and key the config may carry. Anything else is refused, not
+# ignored: a misspelled `requird` would silently drop the requirement, and a
+# stray `[claim]` section would parse as nothing and pass. Same rule as the
+# claims file.
+KNOWN_SECTIONS: dict[str, frozenset[str]] = {
+    "scan": frozenset({"paths", "ignore_dirs", "extensions", "exempt_marker", "exclude_tests", "allow_empty"}),
+    "claims": frozenset({"file", "required", "fail_on_weakened", "optional", "command_change"}),
+    "receipts": frozenset({"dir"}),
+    "run": frozenset({"timeout_s", "max_output_bytes", "output"}),
+}
+
+COMMAND_CHANGE_POLICIES = ("fail", "note")
+OUTPUT_POLICIES = ("excerpt", "none")
+
+# The fields that make up the gate policy: what a pull request is not
+# allowed to weaken without a maintainer's approval. Everything else in the
+# config (nothing today) is operational.
+POLICY_FIELDS = (
+    "paths", "ignore_dirs", "extensions", "exempt_marker", "exclude_tests", "allow_empty",
+    "claims_file", "required_claims", "fail_on_weakened", "claims_optional", "command_change",
+    "receipt_dir", "timeout_s", "max_output_bytes", "output",
+)
 
 # Directories never scanned, in any repository. Build output and vendored
 # dependencies are not the agent's work; scanning them only produces noise.
@@ -73,10 +98,34 @@ def is_test_file(relative: Path) -> bool:
     return any(part in TEST_DIR_NAMES for part in relative.parts[:-1])
 
 
+def _did_you_mean(unknown: str, known: frozenset[str]) -> str:
+    close = difflib.get_close_matches(unknown, sorted(known), n=1, cutoff=0.6)
+    return f" (did you mean '{close[0]}'?)" if close else ""
+
+
+def _refuse_unknown(entry: dict[str, Any], known: frozenset[str], where: str) -> None:
+    unknown = sorted(set(entry) - known)
+    if not unknown:
+        return
+    listed = ", ".join(f"'{key}'{_did_you_mean(key, known)}" for key in unknown)
+    raise ConfigError(
+        f"{where} declares {listed}, which Countersign does not understand. Known keys are {sorted(known)}. "
+        "An unrecognised key is refused rather than ignored, because ignoring it would quietly change what the gate enforces."
+    )
+
+
 def _table(raw: dict[str, Any], name: str) -> dict[str, Any]:
     value = raw.get(name, {})
     if not isinstance(value, dict):
         raise ConfigError(f"[{name}] must be a table")
+    _refuse_unknown(value, KNOWN_SECTIONS[name], f"[{name}]")
+    return value
+
+
+def _choice(table: dict[str, Any], section: str, key: str, default: str, choices: tuple[str, ...]) -> str:
+    value = table.get(key, default)
+    if not isinstance(value, str) or value not in choices:
+        raise ConfigError(f"[{section}] {key} must be one of {list(choices)}")
     return value
 
 
@@ -119,24 +168,43 @@ class Config:
     extensions: set[str] = field(default_factory=lambda: set(DEFAULT_EXTENSIONS))
     exempt_marker: str = DEFAULT_EXEMPT_MARKER
     exclude_tests: bool = True
+    allow_empty: bool = False
     claims_file: str | None = "claims.toml"
     required_claims: list[str] = field(default_factory=list)
     fail_on_weakened: bool = True
+    claims_optional: bool = False
+    command_change: str = "fail"
     receipt_dir: str = ".countersign"
     timeout_s: int = 300
     max_output_bytes: int = 20000
+    output: str = "excerpt"
     extra: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> "Config":
         path = Path(path).resolve()
-        raw: dict[str, Any] = {}
+        text: bytes | None = None
         if path.exists():
+            text = path.read_bytes()
+        return cls.from_bytes(text, root=path.parent, config_path=path)
+
+    @classmethod
+    def from_bytes(cls, text: bytes | None, *, root: Path, config_path: Path) -> "Config":
+        """Parse config text as if it lived at ``config_path`` under ``root``.
+
+        Used for the file on disk and for the same file at a base revision,
+        so a pull request's code can be checked against the policy of the
+        branch it targets."""
+        raw: dict[str, Any] = {}
+        if text is not None:
             try:
-                with path.open("rb") as handle:
-                    raw = tomllib.load(handle)
-            except tomllib.TOMLDecodeError as exc:
-                raise ConfigError(f"{path.name} is not valid TOML: {exc}") from None
+                raw = tomllib.loads(text.decode("utf-8-sig"))
+            except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
+                raise ConfigError(f"{Path(config_path).name} is not valid TOML: {exc}") from None
+        if not isinstance(raw, dict):
+            raise ConfigError(f"{Path(config_path).name} is not a table")
+        _refuse_unknown(raw, frozenset(KNOWN_SECTIONS), Path(config_path).name)
+        path = Path(config_path)
         scan = _table(raw, "scan")
         claims = _table(raw, "claims")
         receipts = _table(raw, "receipts")
@@ -155,14 +223,40 @@ class Config:
             extensions=set(_string_list(scan, "scan", "extensions", DEFAULT_EXTENSIONS)),
             exempt_marker=_string(scan, "scan", "exempt_marker", DEFAULT_EXEMPT_MARKER),
             exclude_tests=_boolean(scan, "scan", "exclude_tests", True),
+            allow_empty=_boolean(scan, "scan", "allow_empty", False),
             claims_file=claims_file,
             required_claims=_string_list(claims, "claims", "required", []),
             fail_on_weakened=_boolean(claims, "claims", "fail_on_weakened", True),
+            claims_optional=_boolean(claims, "claims", "optional", False),
+            command_change=_choice(claims, "claims", "command_change", "fail", COMMAND_CHANGE_POLICIES),
             receipt_dir=_string(receipts, "receipts", "dir", ".countersign"),
             timeout_s=_integer(run, "run", "timeout_s", 300, minimum=1),
             max_output_bytes=_integer(run, "run", "max_output_bytes", 20000, minimum=0),
+            output=_choice(run, "run", "output", "excerpt", OUTPUT_POLICIES),
             extra=raw,
         )
+
+    def policy(self) -> dict[str, Any]:
+        """The policy fields in canonical form: lists sorted, so two configs
+        that enforce the same thing fingerprint the same."""
+        out: dict[str, Any] = {}
+        for name in POLICY_FIELDS:
+            value = getattr(self, name)
+            if isinstance(value, (set, frozenset, list)):
+                value = sorted(value)
+            out[name] = value
+        return out
+
+    def policy_sha256(self) -> str:
+        return hashlib.sha256(json.dumps(self.policy(), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def with_policy_of(self, other: "Config") -> "Config":
+        """This checkout, enforced under ``other``'s policy."""
+        merged = Config(root=self.root, config_path=self.config_path, extra=self.extra)
+        for name in POLICY_FIELDS:
+            value = getattr(other, name)
+            setattr(merged, name, set(value) if isinstance(value, set) else (list(value) if isinstance(value, list) else value))
+        return merged
 
     def claims_path(self) -> Path | None:
         if not self.claims_file:
@@ -189,6 +283,10 @@ class Config:
         """
         root = Path(self.root).resolve()
         collected: list[Path] = []
+        if not self.paths:
+            raise ConfigError("[scan] paths is empty; a scan of nothing cannot pass. Name at least one path, or set allow_empty = true to say so on purpose")
+        if not self.extensions:
+            raise ConfigError("[scan] extensions is empty; a scan of nothing cannot pass. Name at least one extension, or set allow_empty = true to say so on purpose")
         for base in self.paths:
             base_path = (root / base).resolve()
             if not base_path.is_relative_to(root):

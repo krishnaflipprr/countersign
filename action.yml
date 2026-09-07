@@ -1,6 +1,6 @@
 # audited on 20260903
 name: "Countersign"
-description: "Your agent signs. Countersign proves it. Deterministic verification of agent completion claims: marker scan plus falsifiable-claims gate, tamper-evident receipts."
+description: "Your agent says done. Countersign checks: a deterministic gate for agent completion claims, with receipts the agent cannot edit."
 branding:
   icon: "check-circle"
   color: "green"
@@ -19,19 +19,23 @@ inputs:
     required: false
     default: ".countersign"
   claims-base:
-    description: "Git revision to diff the claims file against. Empty means the pull request's base branch on pull_request events and no diff otherwise."
+    description: "Git revision whose policy and claims the run is judged against. Empty means the pull request's exact base commit on pull_request events and no base otherwise."
     required: false
     default: ""
-  attest:
-    description: "true signs the receipt JSON with GitHub Artifact Attestations (Sigstore). Free for public repositories on every plan; private repositories need GitHub Enterprise Cloud. The calling job must grant permissions id-token: write and attestations: write."
+  approval-label:
+    description: "The pull request label a maintainer adds to approve a weakening of the policy or the claims. Only people with write access can add labels."
     required: false
-    default: "false"
+    default: "countersign-approved"
+  attest:
+    description: "Sign the receipt JSON with GitHub Artifact Attestations (Sigstore). auto signs public repositories, where it is free on every plan, and skips private ones, which need GitHub Enterprise Cloud; true always signs and fails visibly when it cannot; false never signs. The calling job must grant id-token: write and attestations: write."
+    required: false
+    default: "auto"
 
 runs:
   using: "composite"
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v7
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
       with:
         python-version: "3.12"
 
@@ -46,14 +50,22 @@ runs:
         COUNTERSIGN_CONFIG: ${{ inputs.config }}
         COUNTERSIGN_FAIL_ON: ${{ inputs.fail-on }}
         COUNTERSIGN_CLAIMS_BASE: ${{ inputs.claims-base }}
-        PR_BASE_REF: ${{ github.base_ref }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        # true when a maintainer added the approval label. Labels can only be
+        # added by people with write access, so this is the maintainer's word.
+        COUNTERSIGN_APPROVED: ${{ contains(github.event.pull_request.labels.*.name, inputs.approval-label) }}
       run: |
         base_args=()
         if [ -n "$COUNTERSIGN_CLAIMS_BASE" ]; then
-          base_args=(--claims-base "$COUNTERSIGN_CLAIMS_BASE")
-        elif [ -n "$PR_BASE_REF" ]; then
-          git fetch --no-tags --depth=1 origin "$PR_BASE_REF" || true
-          base_args=(--claims-base "origin/$PR_BASE_REF")
+          base_args=(--base "$COUNTERSIGN_CLAIMS_BASE")
+        elif [ -n "$PR_BASE_SHA" ]; then
+          # The exact commit the pull request targets, not a branch name that
+          # could move between the event and this step.
+          git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"
+          base_args=(--base "$PR_BASE_SHA")
+        fi
+        if [ "$COUNTERSIGN_APPROVED" = "true" ]; then
+          base_args+=(--approved)
         fi
         set +e
         python -m countersign verify --config "$COUNTERSIGN_CONFIG" --no-color \
@@ -73,8 +85,8 @@ runs:
         fi
 
     - name: Attest the receipt
-      if: inputs.attest == 'true'
-      uses: actions/attest@v4
+      if: inputs.attest == 'true' || (inputs.attest == 'auto' && github.event.repository.private == false)
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
       with:
         subject-path: ${{ inputs.receipts-dir }}/receipts/*.json
         predicate-type: https://getcountersign.me/receipt/v1
@@ -82,7 +94,7 @@ runs:
 
     - name: Upload receipts
       if: always()
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: countersign-receipts
         path: ${{ inputs.receipts-dir }}

@@ -14,12 +14,14 @@ What counts as weakened, deterministically:
   expect changed       the judgement rule changed
   needle changed       what the output must contain changed
 
-  command neutered    the command was doing work and now always exits 0
+  command changed      the proof changed (policy default: a person approves it)
 
-A changed command is otherwise reported as changed and left to the
-reviewer: the engine cannot know whether ``npm test`` became stricter or
-looser. It can know that ``true`` checks nothing, and says so. A changed
-statement or timeout is reported as wording.
+The engine does not try to read shell well enough to decide whether
+``pytest || true`` still tests anything; a changed command is a weakening
+by default (``[claims] command_change = "fail"``) and a maintainer's
+approval turns it into a note. With ``command_change = "note"`` only a
+command that provably cannot fail (``true``, ``:``, a bare ``echo``) counts,
+and the engine says why. A changed statement or timeout is wording.
 """
 
 from __future__ import annotations
@@ -72,6 +74,10 @@ class ClaimChange:
 
 
 def claims_text_at(root: Path, ref: str, claims_file: str) -> bytes | None:
+    return file_text_at(root, ref, claims_file, "claims")
+
+
+def file_text_at(root: Path, ref: str, relative_file: str, what: str = "file") -> bytes | None:
     """The claims file as it was at ``ref``; None when it did not exist there.
 
     Raises ClaimsError when git cannot answer at all (no repository, no such
@@ -84,25 +90,25 @@ def claims_text_at(root: Path, ref: str, claims_file: str) -> bytes | None:
             capture_output=True, text=True, timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ClaimsError(f"cannot read claims at {ref}: git is not available ({exc})") from None
+        raise ClaimsError(f"cannot read {what} at {ref}: git is not available ({exc})") from None
     if top.returncode != 0:
-        raise ClaimsError(f"cannot read claims at {ref}: {root} is not inside a git repository")
+        raise ClaimsError(f"cannot read {what} at {ref}: {root} is not inside a git repository")
     toplevel = Path(top.stdout.strip()).resolve()
-    target = (Path(root).resolve() / claims_file).resolve()
+    target = (Path(root).resolve() / relative_file).resolve()
     if not target.is_relative_to(toplevel):
-        raise ClaimsError(f"cannot read claims at {ref}: {target} is outside the repository {toplevel}")
+        raise ClaimsError(f"cannot read {what} at {ref}: {target} is outside the repository {toplevel}")
     relative = target.relative_to(toplevel).as_posix()
     # ls-tree answers "does this path exist at that revision" with its exit
     # code and output alone, so no error message has to be parsed (git
     # localises its messages).
     listed = _git_bytes(toplevel, ref, "ls-tree", ref, "--", relative)
     if listed.returncode != 0:
-        raise ClaimsError(f"cannot read claims at {ref}: {listed.stderr.decode('utf-8', errors='replace').strip() or 'not a valid revision'}")
+        raise ClaimsError(f"cannot read {what} at {ref}: {listed.stderr.decode('utf-8', errors='replace').strip() or 'not a valid revision'}")
     if not listed.stdout.strip():
         return None
     shown = _git_bytes(toplevel, ref, "show", f"{ref}:{relative}")
     if shown.returncode != 0:
-        raise ClaimsError(f"cannot read claims at {ref}: {shown.stderr.decode('utf-8', errors='replace').strip() or 'git show failed'}")
+        raise ClaimsError(f"cannot read {what} at {ref}: {shown.stderr.decode('utf-8', errors='replace').strip() or 'git show failed'}")
     return shown.stdout
 
 
@@ -110,12 +116,18 @@ def _git_bytes(cwd: Path, ref: str, *args: str) -> subprocess.CompletedProcess[b
     try:
         return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ClaimsError(f"cannot read claims at {ref}: {exc}") from None
+        raise ClaimsError(f"cannot read {ref}: {exc}") from None
 
 
-def diff_claims(base: list[Claim] | None, head: list[Claim] | None) -> list[ClaimChange]:
+def diff_claims(base: list[Claim] | None, head: list[Claim] | None, *, command_change_weakens: bool = True) -> list[ClaimChange]:
     """Changes from ``base`` to ``head``, ordered by claim id. None means the
-    file did not exist on that side."""
+    file did not exist on that side.
+
+    ``command_change_weakens`` is the policy default: a changed command is a
+    weakening, because the engine cannot read shell well enough to know
+    whether ``pytest || true`` still tests anything, and a changed proof
+    needs a person to look at it. With it off, only a command that provably
+    cannot fail counts."""
     base_by_id = {c.claim_id: c for c in (base or [])}
     head_by_id = {c.claim_id: c for c in (head or [])}
     changes: list[ClaimChange] = []
@@ -137,10 +149,12 @@ def diff_claims(base: list[Claim] | None, head: list[Claim] | None) -> list[Clai
         if not fields:
             continue
         weakened = any(name in WEAKENING_FIELDS for name in fields)
-        # A command that was doing work and now cannot fail is a weakening
-        # even though the engine stays agnostic about command changes in
-        # general: this one is decidable without judging the command's
-        # meaning, because nothing can disprove a command that always exits 0.
+        # A changed command is a changed proof. By default that is a
+        # weakening for a person to approve; the engine does not try to
+        # read shell well enough to say otherwise. The no-op check below is
+        # an explanation, never the decision.
+        if "command" in fields and command_change_weakens:
+            weakened = True
         neutered = (
             "command" in fields
             and not is_no_op_command(before.command)
@@ -157,7 +171,7 @@ def diff_claims(base: list[Claim] | None, head: list[Claim] | None) -> list[Clai
     return changes
 
 
-def diff_against_ref(root: Path, ref: str, claims_file: str, head: list[Claim] | None) -> tuple[list[ClaimChange], str | None]:
+def diff_against_ref(root: Path, ref: str, claims_file: str, head: list[Claim] | None, *, command_change_weakens: bool = True) -> tuple[list[ClaimChange], str | None]:
     """Diff the working tree's claims against those at ``ref``.
 
     Returns (changes, base_problem). ``base_problem`` names a base claims
@@ -167,9 +181,9 @@ def diff_against_ref(root: Path, ref: str, claims_file: str, head: list[Claim] |
     """
     text = claims_text_at(root, ref, claims_file)
     if text is None:
-        return diff_claims(None, head), None
+        return diff_claims(None, head, command_change_weakens=command_change_weakens), None
     try:
         base = parse_claims(text, f"{claims_file} at {ref}")
     except ClaimsError as exc:
-        return diff_claims(None, head), str(exc)
-    return diff_claims(base, head), None
+        return diff_claims(None, head, command_change_weakens=command_change_weakens), str(exc)
+    return diff_claims(base, head, command_change_weakens=command_change_weakens), None

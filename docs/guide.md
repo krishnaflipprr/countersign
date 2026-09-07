@@ -93,9 +93,13 @@ A required claim that is not declared is recorded as `MISSING` and fails the gat
 
 A removed claim, a changed expectation or a changed needle is a weakening. So is a command swapped for one that cannot fail (`true`, `:`, `exit 0`, a bare `echo`): nothing can disprove a command that always succeeds, and keeping the claim while pointing it at `true` is cheaper than deleting it. Any other changed command is listed for the reviewer, because the engine cannot know whether `npm test` became stricter or looser.
 
-A claim may carry only `id`, `statement`, `command`, `expect`, `needle` and `timeout_s`. Any other key is refused with exit code 2 and a did-you-mean suggestion, because a misspelled `expct` would otherwise silently drop the claim back to `exit 0` and pass.
+A claim may carry only `id`, `statement`, `command`, `expect`, `needle` and `timeout_s`. Any other key is refused with exit code 2 and a did-you-mean suggestion, because a misspelled `expct` would otherwise silently drop the claim back to `exit 0` and pass. The same rule applies to `countersign.toml`.
 
-Give `verify` the base revision and the diff becomes part of the run, the receipt and the pack. A weakened claim fails the gate unless the config sets `fail_on_weakened = false`, in which case it is recorded and the run says so:
+**The policy is the base branch's.** Give `verify` a base revision (`--base origin/main`; the GitHub action passes the pull request's exact base commit) and three things happen: the base revision's `countersign.toml` becomes the policy the run enforces, the checkout's `countersign.toml` is diffed against it, and the checkout's `claims.toml` is diffed against the base's. A narrower scan, a dropped required claim, a removed claims file, `fail_on_weakened` turned off, a removed claim, a changed expectation, needle or command: each is a weakening and fails the gate. A changed command counts because the engine does not read shell; `pytest || true` is a command too, and only a person can say whether the new proof proves anything.
+
+**Approval.** A maintainer accepts a weakening by adding the `countersign-approved` label to the pull request; the action passes `--approved` when the label is present. Only people with write access can add labels. The receipt records that the label was used. It never rescues a run that proved nothing: an empty scan is an error and a missing claims file fails, label or not.
+
+A weakened claim or policy fails the gate unless the base policy sets `fail_on_weakened = false`, in which case it is recorded and the run says so:
 
 ![countersign verify with a weakened claim](images/verify-weakened.png)
 
@@ -124,14 +128,23 @@ If the files changed, you are told which. If the findings differ, you are told w
 If the repository's origin is on github.com, `countersign init` already wrote `.github/workflows/countersign.yml` for you (it says so in its output; `--no-github` skips it, `--github` insists). Commit and push it. Otherwise, add this step to a workflow of your own:
 
 ```yaml
-- uses: krishnaflipprr/countersign@v0.2
-  with:
-    config: countersign.toml      # default
-    fail-on: fail                 # or warn: record the verdict without failing
-    receipts-dir: .countersign    # must match [receipts] dir in the config
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+steps:
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+  - uses: krishnaflipprr/countersign@v0.3
+    with:
+      config: countersign.toml      # default
+      fail-on: fail                 # or warn: record the verdict without failing
+      receipts-dir: .countersign    # must match [receipts] dir in the config
+      approval-label: countersign-approved
+      attest: auto                  # sign receipts of public repositories
 ```
 
-The action runs Countersign straight from its checkout, with no pip install and nothing fetched from PyPI. The Markdown summary lands in the job step summary, receipts and packs upload as a `countersign-receipts` artifact, and on pull requests the claims file is diffed against the base branch.
+The action runs Countersign straight from its checkout, with no pip install and nothing fetched from PyPI; the actions it uses are pinned to commits. The Markdown summary lands in the job step summary, receipts and packs upload as a `countersign-receipts` artifact, and on pull requests the exact base commit's policy and claims are enforced (section 5). Receipts of public repositories are signed with GitHub Artifact Attestations by default. A pull request can edit this workflow file; protect it with CODEOWNERS, or use the GitHub App, whose check fails on such a pull request until the approval label is added.
 
 ## 9. Exemptions
 
@@ -154,19 +167,25 @@ ignore_dirs = [".git", "node_modules", "__pycache__", ".venv", "dist", "build", 
 extensions = [".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".rs", ".rb", ".java", ".kt", ".swift", ".php", ".cs", ".scala"]
 exempt_marker = "countersign: exempt"
 exclude_tests = true               # test files legitimately fabricate data
+allow_empty = false                # a scan matching no file is an error unless this says otherwise
 
 [claims]
-file = "claims.toml"               # "" runs the marker scan only, reported as skipped
+file = "claims.toml"               # "" with optional = true runs the marker scan only, reported as skipped
 required = []                      # claim ids that must be declared
-fail_on_weakened = true            # when a base revision is given
+fail_on_weakened = true            # a weakened claim or policy fails, unless the approval label is present
+optional = false                   # a missing claims file fails unless true
+command_change = "fail"            # a changed claim command is a weakening; "note" counts only commands that cannot fail
 
 [receipts]
 dir = ".countersign"
 
 [run]
 timeout_s = 300                    # per claim; a timed-out claim fails, and its process tree is killed
-max_output_bytes = 20000           # characters of command output kept on the receipt
+max_output_bytes = 20000           # characters of command output kept on the receipt, after redaction
+output = "excerpt"                 # "none" keeps only the exit code
 ```
+
+Unknown sections or keys are refused with exit code 2 and a did-you-mean suggestion. On a pull request the base branch's file is enforced; every field above except the `[run]` limits is part of the policy whose weakening fails the gate.
 
 Exit codes: 0 countersigned or reproduced, 1 not countersigned (or register damaged, or not reproduced), 2 usage error including a config or claims file that cannot be honoured, 130 interrupted.
 

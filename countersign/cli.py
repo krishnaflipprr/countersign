@@ -67,20 +67,34 @@ extensions = [
 exempt_marker = "countersign: exempt"
 # Test files legitimately fabricate data; they are excluded by default.
 exclude_tests = true
+# A scan that matches no file is an error, because nothing checked cannot
+# pass. Set true only to say on purpose that this repository has nothing
+# to scan.
+allow_empty = false
 
 [claims]
 # Declaration of what is true about this repository, each claim with the
 # command that fails if the claim is false, in claims.toml next to this
-# file. Set file = "" to run scan-only (reported as skipped, not passed).
+# file.
 file = "claims.toml"
 # Claim ids that must be declared. A required claim nobody wrote is recorded
 # as missing and fails the gate, so the standard cannot be lowered by
 # deleting the claim.
 required = {required}
-# When verify is given a base revision (--claims-base, which the GitHub
-# action does on pull requests), a removed claim or a changed expectation
-# or needle is a weakening. true fails the gate on it; false only records it.
+# On a pull request the base branch's copy of this file is the policy that
+# counts, and any weakening of it or of claims.toml (a removed claim, a
+# changed expectation, needle or command, a narrower scan) fails the gate.
+# A maintainer approves a weakening by adding the countersign-approved
+# label to the pull request. false only records weakenings.
 fail_on_weakened = true
+# A missing claims file fails the run. true makes the claims check optional
+# (reported as skipped, never as passed).
+optional = false
+# "fail": a changed claim command is a weakening; the engine does not read
+# shell well enough to know whether "pytest || true" still tests anything,
+# so a changed proof needs a person. "note": only a command that provably
+# cannot fail counts.
+command_change = "fail"
 
 [receipts]
 # Where receipts, the register and evidence packs are written.
@@ -91,8 +105,12 @@ dir = ".countersign"
 # with everything it spawned, and recorded as timed out.
 timeout_s = 300
 # How much captured command output a receipt keeps, in characters. Longer
-# output is kept from both ends with the middle cut out.
+# output is kept from both ends with the middle cut out. Credential-shaped
+# values are replaced with [redacted] before anything is kept.
 max_output_bytes = 20000
+# "excerpt" keeps command output on the receipt as evidence; "none" keeps
+# only the exit code.
+output = "excerpt"
 """
 
 
@@ -200,7 +218,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         return EXIT_FAIL
 
     try:
-        result = run_gate(config, register=register, claims_base=args.claims_base or None)
+        result = run_gate(config, register=register, claims_base=args.claims_base or None, approved=bool(args.approved))
     except (ConfigError, ClaimsError) as exc:
         print(f"verification could not run: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -309,7 +327,7 @@ def _cmd_claims_diff(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     try:
         head = load_claims(config.claims_path())
-        changes, problem = diff_against_ref(config.root, args.base, config.claims_file, head)
+        changes, problem = diff_against_ref(config.root, args.base, config.claims_file, head, command_change_weakens=config.command_change == "fail")
     except ClaimsError as exc:
         print(f"claims diff could not run: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -401,7 +419,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("--no-claims", action="store_true", help="run the marker scan only; skip the claims check (reported as skipped)")
     p_verify.add_argument("--no-color", action="store_true", help="disable colored output")
     p_verify.add_argument("--summary-file", default=None, help="also write a Markdown summary to this path")
-    p_verify.add_argument("--claims-base", default=None, metavar="REF", help="git revision to diff the claims file against; weakened claims fail the gate unless the config says otherwise")
+    p_verify.add_argument("--base", "--claims-base", dest="claims_base", default=None, metavar="REF", help="git revision whose policy and claims this run is judged against (a pull request's base branch); its countersign.toml is enforced, and any weakening of policy or claims fails the gate")
+    p_verify.add_argument("--approved", action="store_true", help="a maintainer approved this pull request's weakenings (the GitHub action sets this from the countersign-approved label); never turns an empty scan or an absent claims file into a pass")
     p_verify.set_defaults(func=_cmd_verify)
 
     p_check = sub.add_parser("check", help="verify the evidence register's hash chain")

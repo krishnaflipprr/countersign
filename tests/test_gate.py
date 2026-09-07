@@ -138,11 +138,19 @@ class TestGate(unittest.TestCase):
             run_gate(self.config)
         self.assertFalse(self.config.register_path().exists())
 
-    def test_claims_turned_off_is_reported_as_skipped(self):
+    def test_claims_turned_off_fails_unless_the_policy_makes_them_optional(self):
         self.config.claims_file = None
         result = run_gate(self.config)
-        self.assertEqual(result.claims_status, "skipped")
+        self.assertEqual(result.claims_status, "absent")
+        self.assertEqual(result.verdict, FAIL_VERDICT, "no claims file and no policy saying that is fine: nothing was proved")
         self.assertIsNone(result.claim_results)
+        self.assertTrue(any("does not make claims optional" in note for note in result.notes))
+
+        self.config.claims_optional = True
+        (self.root / "src" / "service.py").write_text(SERVICE_CLEAN, encoding="utf-8")
+        result = run_gate(self.config)
+        self.assertEqual(result.claims_status, "skipped")
+        self.assertNotEqual(result.verdict, FAIL_VERDICT)
         self.assertTrue(any("skipped" in note for note in result.notes))
         self.assertIn("skipped", terminal_summary(result, use_color=False))
         self.assertIn("skipped", markdown_summary(result))
@@ -241,11 +249,22 @@ class TestGate(unittest.TestCase):
         kinds = [entry["kind"] for entry in Register(self.config.register_path()).entries()]
         self.assertIn("claims_diff", kinds)
 
-        self.config.fail_on_weakened = False
-        (self.root / "src" / "service.py").write_text(SERVICE_CLEAN, encoding="utf-8")
-        result = run_gate(self.config, claims_base="main")
+        # The policy that counts on a pull request is the base branch's.
+        # Turning fail_on_weakened off in the checkout changes nothing until
+        # it is merged, and is itself reported as a weakening of the policy.
+        (self.root / "countersign.toml").write_text(CONFIG_TOML.replace('file = "claims.toml"', 'file = "claims.toml"\nfail_on_weakened = false'), encoding="utf-8")
+        head_config = Config.load(self.root / "countersign.toml")
+        result = run_gate(head_config, claims_base="main")
+        self.assertEqual(result.verdict, FAIL_VERDICT)
+        self.assertTrue(any("fails on weakened" in note for note in result.notes), result.notes)
+        self.assertTrue(any(c.field == "fail_on_weakened" and c.weakened for c in result.policy_diff or []))
+
+        # Once the base itself says weakenings are recorded, they are.
+        subprocess.run([*git, "add", "countersign.toml"], cwd=self.root, check=True, capture_output=True)
+        subprocess.run([*git, "commit", "-q", "-m", "policy records weakenings"], cwd=self.root, check=True, capture_output=True)
+        result = run_gate(head_config, claims_base="main")
         self.assertEqual(result.verdict, FAIL_VERDICT, "the weakened claim itself now fails: the proof command exits 0 but expects nonzero")
-        self.assertTrue(any("recorded, not failed" in note for note in result.notes))
+        self.assertTrue(any("recorded, not failed" in note for note in result.notes), result.notes)
 
     def test_claims_base_without_claims_file_is_a_config_error(self):
         self.config.claims_file = None

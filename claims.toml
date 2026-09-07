@@ -50,3 +50,22 @@ statement = "Swapping a real claim command for one that cannot fail is reported 
 command = "python3 -c \"from countersign.claims import parse_claims as p; from countersign.claimsdiff import diff_claims as d; c = d(p('[[claim]]\\nid = \\\"t\\\"\\nstatement = \\\"s\\\"\\ncommand = \\\"npm test\\\"\\n'), p('[[claim]]\\nid = \\\"t\\\"\\nstatement = \\\"s\\\"\\ncommand = \\\"true\\\"\\n')); raise SystemExit(0 if c and c[0].weakened else 1)\""
 expect = "exit 0"
 
+[[claim]]
+id = "unknown-config-keys-refused"
+statement = "A config with a misspelled key is refused, naming the key, instead of silently changing the policy"
+command = "python3 -c \"from pathlib import Path; from countersign.config import Config; Config.from_bytes(b'[claims]\\nrequird = [\\\"x\\\"]\\n', root=Path('.'), config_path=Path('countersign.toml'))\""
+expect = "output contains"
+needle = "did you mean 'required'"
+
+[[claim]]
+id = "empty-scan-refused"
+statement = "A scan scope that matches no file is refused instead of passing"
+command = "python3 -c \"from pathlib import Path; from countersign.config import Config; Config.from_bytes(b'[scan]\\npaths = []\\n', root=Path('.'), config_path=Path('countersign.toml')).collect_files()\""
+expect = "output contains"
+needle = "a scan of nothing cannot pass"
+
+[[claim]]
+id = "policy-narrowing-is-weakening"
+statement = "Narrowing the scan, dropping a required claim or turning off fail_on_weakened is reported as a weakening of the policy"
+command = "python3 -c \"from pathlib import Path; from countersign.config import Config as C; from countersign.policydiff import diff_policy; b = C.from_bytes(b'[scan]\\npaths = [\\\"src\\\", \\\"lib\\\"]\\n[claims]\\nrequired = [\\\"tests-pass\\\"]\\n', root=Path('.'), config_path=Path('countersign.toml')); h = C.from_bytes(b'[scan]\\npaths = [\\\"src\\\"]\\n[claims]\\nrequired = []\\nfail_on_weakened = false\\n', root=Path('.'), config_path=Path('countersign.toml')); w = sorted(c.field for c in diff_policy(b, h) if c.weakened); raise SystemExit(0 if w == ['fail_on_weakened', 'paths', 'required_claims'] else 1)\""
+expect = "exit 0"

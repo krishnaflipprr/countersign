@@ -97,16 +97,26 @@ The full guide, with a screenshot of every command, is in [docs/guide.md](docs/g
 If the repository's origin is on github.com, `countersign init` writes `.github/workflows/countersign.yml` for you. To add it to an existing workflow instead:
 
 ```yaml
-- uses: krishnaflipprr/countersign@v0.2
-  with:
-    config: countersign.toml     # default
-    fail-on: fail                # or warn: record the verdict without failing the job
-    receipts-dir: .countersign   # must match [receipts] dir in the config
-    claims-base: ""              # git revision to diff claims against; pull requests use their base by default
-    attest: "false"              # true signs the receipt with GitHub Artifact Attestations
+permissions:
+  contents: read
+  id-token: write        # these two let the action sign the receipt;
+  attestations: write    # drop them and set attest: "false" to opt out
+
+steps:
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+  - uses: krishnaflipprr/countersign@v0.3
+    with:
+      config: countersign.toml          # default
+      fail-on: fail                     # or warn: record the verdict without failing the job
+      receipts-dir: .countersign        # must match [receipts] dir in the config
+      claims-base: ""                   # revision to judge against; pull requests use their exact base commit by default
+      approval-label: countersign-approved   # the label a maintainer adds to approve a weakening
+      attest: auto                      # auto signs public repositories; true always; false never
 ```
 
-The action runs the engine straight from its checkout; nothing is fetched from a package index during the run. The verdict lands in the job summary and the receipts upload as an artifact named `countersign-receipts`. Attestation is free for public repositories on every GitHub plan; private repositories need GitHub Enterprise Cloud, and the job must grant `id-token: write` and `attestations: write`.
+The action runs the engine straight from its checkout; nothing is fetched from a package index during the run, and every third-party action it uses is pinned to a commit. The verdict lands in the job summary and the receipts upload as an artifact named `countersign-receipts`. Attestation signs the receipt with GitHub Artifact Attestations; it is free for public repositories on every plan, so `auto` signs those and skips private ones, which need GitHub Enterprise Cloud.
+
+On pull requests the action judges the change against the exact base commit: the base branch's `countersign.toml` is the policy that counts, and the base's `claims.toml` is what the pull request's claims are compared with. See the next section for what that means.
 
 ## Writing claims
 
@@ -132,14 +142,19 @@ Rules:
 - **Three expectations.** `exit 0`: the command must succeed. `nonzero exit`: the command must fail (for "the old endpoint is gone"). `output contains`: the output must contain `needle`.
 - **Only these keys.** `id`, `statement`, `command`, `expect`, `needle`, `timeout_s`. Any other key is refused with exit code 2 and a did-you-mean suggestion, because a misspelled `expct` would otherwise silently drop the claim back to `exit 0` and pass.
 - **Timeouts.** A claim that runs past `timeout_s` (default 300 seconds) is killed together with everything it started and recorded as timed out, which fails the run.
+- **Output on the receipt.** The end of each command's output is kept as evidence, after credential-shaped values (tokens, keys, `Authorization` headers, private keys, labelled passwords) are replaced with `[redacted]`; the receipt counts the replacements. `output = "none"` keeps only the exit code.
 - **Commands run with your privileges**, in the repository root, through your shell. Review changes to `claims.toml` the way you review changes to CI configuration.
 
-### Who guards the claims
+### Who guards the claims, and the policy
 
-The agent that wrote the code can also edit the claims, and the quiet way past a gate is to soften the claim rather than fix the code. Three things make that visible:
+The agent that wrote the code can also edit the claims, the configuration and the workflow, and the quiet way past a gate is to soften the gate rather than fix the code. On a pull request, Countersign enforces the branch the pull request targets, not the pull request:
 
-- **Required claims.** `required = ["tests-pass"]` in `countersign.toml` names claim ids that must exist. A required claim nobody declared is recorded as `MISSING` and fails the run.
-- **The claims diff.** On every pull request (and with `--claims-base` locally) the claims file is compared with the base branch. A removed claim, a changed expectation, a changed needle, or a command swapped for one that cannot fail (`true`, `:`, `exit 0`, a bare `echo`) is a weakening and fails the run. Any other command change is listed for the reviewer.
+- **The base policy counts.** `countersign.toml` on the base branch decides what is scanned, which claims are required and whether weakenings fail. The pull request's copy is read, fingerprinted and diffed, but not obeyed. A change that narrows the gate (a scan path or extension removed, a directory newly ignored, a required claim dropped, the claims file removed, `fail_on_weakened` turned off) is a weakening and fails the run.
+- **Required claims.** `required = ["tests-pass"]` names claim ids that must exist. A required claim nobody declared is recorded as `MISSING` and fails the run.
+- **The claims diff.** The pull request's `claims.toml` is compared with the base's. A removed claim, a changed expectation, a changed needle or a changed command is a weakening and fails the run. A changed command counts because the engine does not try to read shell: `pytest || true` looks like a command, and only a person can say whether the new proof still proves anything.
+- **Approval is a label.** A maintainer accepts a weakening by adding the `countersign-approved` label to the pull request. Only people with write access can add labels, so the label is the maintainer's word, and the receipt records that it was used. The label never turns a run that proved nothing into a pass: an empty scan is an error and a missing claims file fails, label or not.
+- **Fail closed.** A scan that matches no file is an error, not a pass. A missing claims file fails unless the policy says `optional = true`. Unknown keys in `countersign.toml` are refused like unknown keys in `claims.toml`.
+- **The workflow itself.** A pull request can also edit `.github/workflows/countersign.yml`. The engine cannot see that from inside the workflow; the GitHub App can, and its check fails on such a pull request until the label is added. Repositories without the App should protect that file with CODEOWNERS.
 - **Claims from the agent's report.** `countersign claims from-report done.md` (or `-` for standard input) turns the checkable sentences of an agent's completion message into proposed claims: "all tests pass" becomes the repository's test command, "created src/pricing.ts" becomes a file check, a URL becomes a request that must succeed. Fixed English patterns, not a model; a sentence whose command cannot be derived is reported as unresolved, never guessed. `--write` appends the proposals to `claims.toml`.
 
 ## What the scan looks for
@@ -169,7 +184,7 @@ Test files are excluded by default, because test code legitimately fabricates da
 
 ## Receipts, the register, reproduce
 
-- Every run writes a JSON receipt, a single-file HTML evidence pack and a Markdown summary into `.countersign/`. All three open with the result in plain words. Receipts name the git commit and say whether the working tree had uncommitted changes.
+- Every run writes a JSON receipt, a single-file HTML evidence pack and a Markdown summary into `.countersign/`. All three open with the result in plain words. Receipts name the git commit, say whether the working tree had uncommitted changes, and on pull requests carry the hashes of the base policy and base claims the run was judged against and whether the approval label was used, so a signed receipt says which policy it enforced.
 - Every run appends one line to `.countersign/register.jsonl`, each carrying the hash of the line before it. Edit any earlier line and `countersign check` says so. What this proves, exactly: that no entry was altered in place. It cannot show entries dropped from the end, so `check` prints the head hash; pin it somewhere the machine does not control and pass it back with `--expect-head` to catch that too. The GitHub App keeps a copy of every receipt outside the repository for the same reason.
 - `countersign reproduce --run <id>` re-derives a recorded run from the same inputs and compares, result for result. If the configuration or claims file changed since, you are told.
 

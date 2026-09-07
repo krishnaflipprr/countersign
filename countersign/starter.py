@@ -20,7 +20,10 @@ TESTS_PASS = "tests-pass"
 
 # Where customers' workflows point. Moves only with a release; the tag it
 # names must exist on that repository before this constant changes.
-ACTION_REF = "krishnaflipprr/countersign@v0.2"
+ACTION_REF = "krishnaflipprr/countersign@v0.3"
+# Third-party actions are pinned to the commit behind the tag. The tag is
+# kept as a comment so Dependabot can move both together.
+CHECKOUT_REF = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1"
 WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "countersign.yml"
 
 
@@ -71,15 +74,21 @@ on:
     branches: [{json.dumps(default_branch)}]
   pull_request:
 
+# contents: read is all the checks need. The two write permissions let the
+# action sign the receipt with GitHub Artifact Attestations, which it does
+# by default for public repositories; remove them and set attest: "false"
+# to opt out.
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   countersign:
     name: countersign verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: {CHECKOUT_REF}
       - uses: {ACTION_REF}
         with:
           config: {json.dumps(config_path_in_repo)}

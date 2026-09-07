@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The gate job signs its receipt with GitHub Artifact Attestations (this
+# repository is public), which needs the two write permissions.
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
 jobs:
   tests:
     name: tests (python ${{ matrix.python }})
@@ -15,8 +22,8 @@ jobs:
       matrix:
         python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ matrix.python }}
       - name: unit tests
@@ -28,7 +35,7 @@ jobs:
     name: countersign verify (the action, on this repository)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: ./
         with:
           config: countersign.toml

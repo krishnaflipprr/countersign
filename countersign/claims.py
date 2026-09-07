@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import signal
 import subprocess
 import time
@@ -82,6 +83,42 @@ class ClaimResult:
     exit_code: int | None = None
     duration_ms: int = 0
     output_excerpt: str = ""
+    redactions: int = 0
+
+
+# Values that must not end up on a receipt. Command output is kept as
+# evidence, and evidence that contains a credential is a leak: the receipt
+# is uploaded as an artifact and, with the App, kept outside the repository.
+# Each pattern is a well-known credential shape or a labelled secret; the
+# value is replaced, the label stays so the reader knows what was there.
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bsk-(?:[A-Za-z0-9_-]{2,}-)?[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"(?i)(authorization\s*:\s*(?:bearer|basic|token)\s+)\S+"),
+    re.compile(r"(?i)\b((?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret|token)\s*[=:]\s*['\"]?)[^\s'\"\[]{8,}"),
+)
+REDACTED = "[redacted]"
+
+
+def redact_secrets(text: str) -> tuple[str, int]:
+    """Replace credential-shaped values in ``text``. Returns the text and how
+    many values were replaced, so the receipt can say so."""
+    count = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        prefix = match.group(1) if match.lastindex else ""
+        return f"{prefix}{REDACTED}"
+
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub(replace, text)
+    return text, count
 
 
 class ClaimsError(ValueError):
@@ -225,8 +262,20 @@ def _kill_tree(process: subprocess.Popen) -> None:
         pass
 
 
-def run_claim(claim: Claim, cwd: Path, default_timeout_s: int, max_output_bytes: int) -> ClaimResult:
-    """Run one claim's command and judge it exactly as declared."""
+def _excerpt(stdout: bytes, stderr: bytes, max_output_bytes: int, keep_output: bool) -> tuple[str, int]:
+    """What the receipt keeps of the command's output: nothing when the
+    policy says so, otherwise a redacted, truncated excerpt."""
+    if not keep_output:
+        return "", 0
+    text, redactions = redact_secrets(_decode(stdout) + _decode(stderr))
+    return _truncate(text, max_output_bytes), redactions
+
+
+def run_claim(claim: Claim, cwd: Path, default_timeout_s: int, max_output_bytes: int, keep_output: bool = True) -> ClaimResult:
+    """Run one claim's command and judge it exactly as declared.
+
+    The judgement reads the raw output; only the excerpt kept on the
+    receipt is redacted and truncated."""
     timeout_s = claim.timeout_s if claim.timeout_s is not None else default_timeout_s
     started = time.monotonic()
     isolation: dict[str, Any] = (
@@ -250,6 +299,7 @@ def run_claim(claim: Claim, cwd: Path, default_timeout_s: int, max_output_bytes:
             stdout, stderr = process.communicate(timeout=_DRAIN_AFTER_KILL_S)
         except subprocess.TimeoutExpired:
             stdout, stderr = b"", b""
+        excerpt, redactions = _excerpt(stdout, stderr, max_output_bytes, keep_output)
         return ClaimResult(
             claim_id=claim.claim_id,
             statement=claim.statement,
@@ -257,12 +307,13 @@ def run_claim(claim: Claim, cwd: Path, default_timeout_s: int, max_output_bytes:
             expect=claim.expect,
             status=TIMEOUT,
             duration_ms=int((time.monotonic() - started) * 1000),
-            output_excerpt=_truncate(_decode(stdout) + _decode(stderr), max_output_bytes),
+            output_excerpt=excerpt,
+            redactions=redactions,
         )
 
     duration_ms = int((time.monotonic() - started) * 1000)
     combined = _decode(stdout) + _decode(stderr)
-    excerpt = _truncate(combined, max_output_bytes)
+    excerpt, redactions = _excerpt(stdout, stderr, max_output_bytes, keep_output)
 
     if claim.expect == "exit 0":
         status = PASS if process.returncode == 0 else FAIL
@@ -280,4 +331,5 @@ def run_claim(claim: Claim, cwd: Path, default_timeout_s: int, max_output_bytes:
         exit_code=process.returncode,
         duration_ms=duration_ms,
         output_excerpt=excerpt,
+        redactions=redactions,
     )

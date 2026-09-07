@@ -88,11 +88,26 @@ def receipt_json(result: GateResult) -> dict:
                     "exit_code": c.exit_code,
                     "duration_ms": c.duration_ms,
                     "output_excerpt": c.output_excerpt,
+                    "redactions": c.redactions,
                 }
                 for c in result.claim_results
             ]
         ),
         "claims_status": result.claims_status,
+        "policy": {
+            "policy_sha256": result.policy_sha256,
+            "base_ref": result.claims_base,
+            "base_policy_sha256": result.base_policy_sha256,
+            "base_config_sha256": result.base_config_sha256,
+            "base_claims_sha256": result.base_claims_sha256,
+            "weakened": len(result.weakened_policy),
+            "changes": (
+                None
+                if result.policy_diff is None
+                else [{"field": c.field, "kind": c.kind, "weakened": c.weakened, "detail": c.detail} for c in result.policy_diff]
+            ),
+        },
+        "approval": {"approved": result.approved, "used": result.approval_used},
         "plain": plain_sentences(result),
         "claims_diff": (
             None

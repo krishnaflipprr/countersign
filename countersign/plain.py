@@ -53,8 +53,12 @@ def plain_sentences(result: GateResult) -> list[str]:
             reasons.append(f"{_count(len(failed) + len(timed_out), 'claim')} out of {len(results)} did not hold")
         if missing:
             reasons.append(f"{_count(len(missing), 'required claim')} {'was' if len(missing) == 1 else 'were'} never declared")
-        if weakened:
+        if weakened and not result.approval_used:
             reasons.append(f"the claims file was weakened compared with {result.claims_base}")
+        if result.weakened_policy and not result.approval_used:
+            reasons.append(f"the gate policy was weakened compared with {result.claims_base}")
+        if result.claims_status == "absent":
+            reasons.append("no claims file was found and the policy does not make claims optional")
         sentences.append("Not countersigned: " + "; ".join(reasons) + ".")
     else:
         scanned = f"{_count(result.files_scanned, 'file')} {'was' if result.files_scanned == 1 else 'were'} scanned and none carries unfinished work"
@@ -85,8 +89,10 @@ def plain_sentences(result: GateResult) -> list[str]:
     if result.verdict == FAIL_VERDICT and held:
         sentences.append(f"{_count(len(held), 'other claim')} held.")
 
-    if result.claim_results is None:
-        sentences.append("No claims were checked: no claims file was found, and a skipped check is not a pass.")
+    if result.claim_results is None and result.claims_status == "skipped":
+        sentences.append("No claims were checked: the policy makes claims optional here, and a skipped check is not a pass.")
+    elif result.claim_results is None:
+        sentences.append("No claims were checked: no claims file was found, and the policy does not make claims optional.")
 
     if weakened:
         parts: list[str] = []
@@ -100,6 +106,15 @@ def plain_sentences(result: GateResult) -> list[str]:
             else:
                 parts.append(f"'{change.claim_id}' was changed")
         sentences.append(f"The claims file was weakened compared with {result.claims_base}: " + "; ".join(parts) + ".")
+
+    if result.weakened_policy:
+        parts = [f"{c.field.replace('_', ' ')} ({c.detail.split(': ', 1)[-1]})" for c in result.weakened_policy]
+        sentences.append(f"The gate policy in countersign.toml was weakened compared with {result.claims_base}: " + "; ".join(parts) + ". The base branch's policy was enforced for this run.")
+    elif result.policy_diff:
+        sentences.append(f"countersign.toml changed compared with {result.claims_base} without weakening the policy; the base branch's policy was enforced for this run.")
+
+    if result.approval_used:
+        sentences.append("A maintainer approved this pull request with the countersign-approved label, so the weakening above is recorded rather than failed.")
 
     if result.git_dirty:
         sentences.append(
