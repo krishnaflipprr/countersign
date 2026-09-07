@@ -110,6 +110,8 @@ def plain_sentences(result: GateResult) -> list[str]:
             else:
                 parts.append(f"'{change.claim_id}' was changed")
         sentences.append(f"The claims file was weakened compared with {result.claims_base}: " + "; ".join(parts) + ".")
+    if (weakened or result.weakened_policy) and not result.approval_used:
+        sentences.append("If a maintainer accepts this change, they add the countersign-approved label to the pull request; the gate then re-runs and records the approval.")
 
     if result.weakened_policy:
         parts = [f"{c.field.replace('_', ' ')} ({c.detail.split(': ', 1)[-1]})" for c in result.weakened_policy]
