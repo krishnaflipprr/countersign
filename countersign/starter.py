@@ -73,6 +73,9 @@ on:
   push:
     branches: [{json.dumps(default_branch)}]
   pull_request:
+    # labeled and unlabeled are here so that adding the countersign-approved
+    # label re-runs the gate and the approval takes effect.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 # contents: read is all the checks need. The two write permissions let the
 # action sign the receipt with GitHub Artifact Attestations, which it does
