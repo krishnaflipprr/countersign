@@ -20,7 +20,7 @@ The agent cannot be the one that certifies its own work. Something outside the a
 
 On every push and every pull request, in your own GitHub Actions:
 
-1. **Scans the code for unfinished work.** Eleven kinds of marker agents leave behind (a note for later, made-up data standing in for a real result, "not implemented yet", "coming soon"), plus functions whose body does nothing and explains nothing. Each finding names the file and line.
+1. **Scans the code for unfinished work.** Thirteen kinds of marker agents leave behind (a note for later, made-up data standing in for a real result, "not implemented yet", "coming soon"), plus functions whose body does nothing and explains nothing. Each finding names the file and line.
 2. **Runs your claims.** A claim is a sentence about the work paired with the command that would fail if the sentence were false. "The test suite passes" is checked by running the tests. "The pricing endpoint answers" is checked by calling it. The command's exit code decides.
 3. **Writes a receipt.** The verdict in plain words, every finding with the line as evidence, every claim as declared and as judged, sealed into a hash-chained log. The GitHub App also keeps a copy outside the repository, where the agent that wrote the code cannot reach it.
 
@@ -144,7 +144,7 @@ The agent that wrote the code can also edit the claims, and the quiet way past a
 
 ## What the scan looks for
 
-Eleven rules, ported from a gate that ran daily on a production codebase of more than five hundred source files with zero false positives, plus one structural check:
+Thirteen rules, eleven of them ported from a gate that ran daily on a production codebase of more than five hundred source files with zero false positives, plus one structural check:
 
 | The receipt says | What was found |
 |---|---|
@@ -159,6 +159,8 @@ Eleven rules, ported from a gate that ran daily on a production codebase of more
 | a description of work not done | "would be implemented", "would be fetched" |
 | text announcing a feature that is not there | "coming soon" |
 | an empty result returned as a stand-in | an empty return with a comment saying TODO, placeholder or "for now" |
+| a placeholder that stops the program instead of doing the work | Rust's `todo!()` or `unimplemented!()` |
+| code that stops with "not implemented" instead of doing the work | a panic, a thrown exception or a raised error whose message says not implemented, in any language |
 | a function that does nothing | a body that is only `pass`, `...` or `{}` with no docstring or comment explaining why |
 
 Python is checked through the parser; overloads, abstract methods and Protocol methods are exempt. TypeScript and JavaScript are checked by a scan that understands comments, strings, template literals and regular expressions; constructors, Angular lifecycle hooks, unexported callbacks, `.d.ts` and minified files are exempt. The word rules apply to every language in scope: Python, TypeScript, JavaScript, Go, Rust, Ruby, Java, Kotlin, Swift, PHP, C# and Scala by default.

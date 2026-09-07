@@ -136,6 +136,30 @@ class TestStubScan(unittest.TestCase):
         self.assertIn(("src/service.py", 6), locations)  # empty-body reported at the def line
         self.assertGreaterEqual(files, 3)
 
+    def test_finds_placeholder_macros_and_not_implemented_raises(self):
+        cases = {
+            "lib.rs": 'fn price(cents: u64) -> u64 {\n    todo!("wire to billing")\n}\nfn refund() { unimplemented!() }\n',
+            "handler.go": 'func Refund(id string) error {\n\tpanic("not implemented")\n}\n',
+            "Service.java": 'public void refund() {\n    throw new UnsupportedOperationException("Not implemented yet");\n}\n',
+            "notify.py": 'def send():\n    raise RuntimeError("not implemented")\n',
+            "api.ts": 'export function charge() {\n  throw new Error("not implemented");\n}\n',
+        }
+        for name, content in cases.items():
+            with self.subTest(name=name):
+                findings, _exemptions, _inert, _files = self._scan_single(name, content)
+                rule_ids = {f.rule_id for f in findings}
+                self.assertTrue({"placeholder-macro", "not-implemented-raised"} & rule_ids, rule_ids)
+        # Ordinary code that mentions the words in other shapes is left alone.
+        clean = {
+            "todo_list.rs": 'let todo = Todo::new();\nlog!("todo item saved");\n',
+            "errors.go": 'return fmt.Errorf("feature %s is not enabled", name)\n',
+            "Errors.java": 'throw new IllegalArgumentException("amount must be positive");\n',
+        }
+        for name, content in clean.items():
+            with self.subTest(name=name):
+                findings, _exemptions, _inert, _files = self._scan_single(name, content)
+                self.assertEqual([f.rule_id for f in findings if f.rule_id in ("placeholder-macro", "not-implemented-raised")], [])
+
     def test_finds_coming_soon_in_typescript(self):
         findings, _exemptions, _inert, _files = scan_tree(self.config)
         self.assertTrue(any(f.rule_id == "coming-soon" and f.path == "src/banner.ts" for f in findings))

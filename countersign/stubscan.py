@@ -75,6 +75,8 @@ RULES: list[Rule] = [
     _rule("would-be-done", r"would be (implemented|replaced|fetched|queried)", re.IGNORECASE, "describes work not done", "a description of work not done"),
     _rule("coming-soon", r"coming soon", re.IGNORECASE, "a feature advertised as absent", "text announcing a feature that is not there"),  # countersign: exempt
     _rule("empty-return-standin", r"return (\[\]|\{\}|None|null)\s*(#|//)\s*(TODO|placeholder|stub|for now)", re.IGNORECASE, "returns empty as a stand-in for a real result", "an empty result returned as a stand-in"),  # countersign: exempt
+    _rule("placeholder-macro", r"\b(todo|unimplemented)!\s*\(", 0, "a placeholder macro that panics instead of doing the work", "a placeholder that stops the program instead of doing the work"),
+    _rule("not-implemented-raised", r"\b(panic|throw new [A-Za-z_.]*(Exception|Error)|raise [A-Za-z_.]*(Error|Exception))\s*\(\s*[\"'][^\"']*not implemented", re.IGNORECASE, "raises 'not implemented' instead of doing the work", "code that stops with 'not implemented' instead of doing the work"),
 ]
 
 
