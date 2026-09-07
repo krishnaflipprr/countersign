@@ -39,8 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
-from .claims import NOT_PASSED, ClaimResult, ClaimsError, load_claims, missing_claim, run_claim
-from .claimsdiff import ClaimChange, diff_against_ref, file_text_at
+from .claims import NOT_PASSED, ClaimResult, ClaimsError, fingerprint_inputs, load_claims, missing_claim, run_claim
+from .claimsdiff import ClaimChange, diff_against_ref, file_text_at, input_content_changes, merge_changes
 from .config import Config, ConfigError, file_sha256
 from .policydiff import PolicyChange, diff_policy
 from .register import Register
@@ -239,6 +239,8 @@ def run_gate(config: Config, *, register: Register | None = None, claims_base: s
     base_problem: str | None = None
     if claims_base:
         changes, base_problem = diff_against_ref(config.root, claims_base, config.claims_file or "", claims, command_change_weakens=config.command_change == "fail")
+        if claims:
+            changes = merge_changes(changes, input_content_changes(config.root, claims_base, claims))
         if base_problem:
             notes.append(f"claims at {claims_base} could not be parsed ({base_problem}); every current claim is shown as added")
 
@@ -299,6 +301,7 @@ def run_gate(config: Config, *, register: Register | None = None, claims_base: s
             claims_status = "ran"
             for claim in claims or []:
                 result = run_claim(claim, config.root, config.timeout_s, config.max_output_bytes, keep_output=config.output == "excerpt")
+                result.inputs = fingerprint_inputs(config.root, claim)
                 claim_results.append(result)
                 register.append("claim", {"run_id": run_id, **_claim_body(result)})
             for claim_id in missing_ids:
@@ -414,4 +417,5 @@ def _claim_body(result: ClaimResult) -> dict:
         "exit_code": result.exit_code,
         "duration_ms": result.duration_ms,
         "output_excerpt": result.output_excerpt,
+        "inputs": dict(result.inputs),
     }

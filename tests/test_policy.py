@@ -220,3 +220,105 @@ class PolicyDiff(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaimInputs(unittest.TestCase):
+    """A command can stay word for word the same while the file it runs is
+    rewritten. Declared inputs make that a weakening too."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        (self.root / "src").mkdir()
+        (self.root / "src" / "app.py").write_text(CLEAN_SOURCE, encoding="utf-8")
+        (self.root / "countersign.toml").write_text('[scan]\npaths = ["src"]\n[claims]\nfile = "claims.toml"\n', encoding="utf-8")
+        (self.root / "package.json").write_text('{"scripts": {"test": "python3 -c \'print(1)\'"}}', encoding="utf-8")
+        (self.root / "claims.toml").write_text('[[claim]]\nid = "tests-pass"\nstatement = "The suite passes"\ncommand = "python3 -c \'print(1)\'"\ninputs = ["package.json"]\n', encoding="utf-8")
+        (self.root / ".gitignore").write_text(".countersign/\n", encoding="utf-8")
+        for args in (("init", "-q", "-b", "main"), ("add", "."), ("commit", "-q", "-m", "base")):
+            subprocess.run([*GIT, *args], cwd=self.root, check=True, capture_output=True)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_inputs_are_parsed_and_validated(self) -> None:
+        from countersign.claims import ClaimsError, parse_claims
+        claims = parse_claims('[[claim]]\nid = "a"\nstatement = "s"\ncommand = "true"\ninputs = ["package.json", "config/"]\n')
+        self.assertEqual(claims[0].inputs, ("package.json", "config/"))
+        for bad in ('inputs = "package.json"', 'inputs = ["../secrets"]', 'inputs = ["/etc/passwd"]', 'inputs = [""]'):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ClaimsError):
+                    parse_claims(f'[[claim]]\nid = "a"\nstatement = "s"\ncommand = "true"\n{bad}\n')
+
+    def test_a_rewritten_input_is_a_weakening_with_the_command_unchanged(self) -> None:
+        config = Config.load(self.root / "countersign.toml")
+        clean = run_gate(config, claims_base="main")
+        self.assertEqual(clean.verdict, PASS_VERDICT)
+        self.assertEqual(clean.claims_diff, [])
+        self.assertEqual(len(clean.claim_results[0].inputs["package.json"]), 64)
+
+        (self.root / "package.json").write_text('{"scripts": {"test": "echo tests pass"}}', encoding="utf-8")
+        result = run_gate(config, claims_base="main")
+        self.assertEqual(result.verdict, FAIL_VERDICT)
+        self.assertEqual([(c.claim_id, c.fields, c.weakened) for c in result.claims_diff], [("tests-pass", ("inputs",), True)])
+        self.assertIn("package.json", result.claims_diff[0].detail)
+        receipt = receipt_json(result)
+        self.assertTrue(any("a file it depends on changed" in s for s in receipt["plain"]), receipt["plain"])
+        self.assertEqual(receipt["claims"][0]["inputs"]["package.json"], result.claim_results[0].inputs["package.json"])
+
+        approved = run_gate(config, claims_base="main", approved=True)
+        self.assertEqual(approved.verdict, PASS_VERDICT)
+        self.assertTrue(approved.approval_used)
+
+    def test_dropping_an_input_is_a_weakening_and_adding_one_is_not(self) -> None:
+        config = Config.load(self.root / "countersign.toml")
+        (self.root / "claims.toml").write_text('[[claim]]\nid = "tests-pass"\nstatement = "The suite passes"\ncommand = "python3 -c \'print(1)\'"\n', encoding="utf-8")
+        dropped = run_gate(config, claims_base="main")
+        self.assertEqual(dropped.verdict, FAIL_VERDICT)
+        self.assertTrue(dropped.claims_diff[0].weakened)
+        (self.root / "claims.toml").write_text('[[claim]]\nid = "tests-pass"\nstatement = "The suite passes"\ncommand = "python3 -c \'print(1)\'"\ninputs = ["package.json", "src"]\n', encoding="utf-8")
+        widened = run_gate(config, claims_base="main")
+        self.assertEqual(widened.verdict, PASS_VERDICT)
+        self.assertFalse(widened.claims_diff[0].weakened)
+
+    def test_directory_inputs_fingerprint_their_files_on_both_sides(self) -> None:
+        config = Config.load(self.root / "countersign.toml")
+        (self.root / "claims.toml").write_text('[[claim]]\nid = "tests-pass"\nstatement = "The suite passes"\ncommand = "python3 -c \'print(1)\'"\ninputs = ["package.json", "src"]\n', encoding="utf-8")
+        subprocess.run([*GIT, "commit", "-q", "-am", "declare src as an input"], cwd=self.root, check=True, capture_output=True)
+        same = run_gate(config, claims_base="main")
+        self.assertEqual(same.claims_diff, [], "the working tree equals the commit, so the directory fingerprints agree")
+        (self.root / "src" / "app.py").write_text(CLEAN_SOURCE + "\n", encoding="utf-8")
+        changed = run_gate(config, claims_base="main")
+        self.assertTrue(changed.claims_diff and changed.claims_diff[0].weakened)
+
+    def test_a_process_left_behind_by_a_claim_does_not_survive_it(self) -> None:
+        from countersign.claims import parse_claims, run_claim
+        marker = self.root / "pid"
+        claim = parse_claims(f'[[claim]]\nid = "leaves"\nstatement = "s"\ncommand = "python3 -c \'import subprocess, sys; p = subprocess.Popen([sys.executable, \\"-c\\", \\"import time; time.sleep(60)\\"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); open(\\"{marker.as_posix()}\\", \\"w\\").write(str(p.pid))\'"\n')[0]
+        result = run_claim(claim, self.root, 30, 1000)
+        self.assertEqual(result.status, "pass")
+        pid = int(marker.read_text())
+        import time
+        alive = True
+        for _ in range(20):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                alive = False
+                break
+            time.sleep(0.1)
+        if alive:
+            os.kill(pid, 9)
+        self.assertFalse(alive, "the child the claim started should have died with the claim's process group")
+
+    def test_starter_claims_declare_their_inputs(self) -> None:
+        from countersign.starter import detect_starter_claims, render_claims_toml
+        from countersign.claims import parse_claims
+        (self.root / "tsconfig.json").write_text("{}", encoding="utf-8")
+        (self.root / "package.json").write_text('{"scripts": {"test": "vitest run", "lint": "eslint ."}, "devDependencies": {"typescript": "5"}}', encoding="utf-8")
+        starters = detect_starter_claims(self.root)
+        by_id = {s.claim_id: s.inputs for s in starters}
+        self.assertEqual(by_id["tests-pass"], ("package.json",))
+        self.assertEqual(by_id["types-check"], ("package.json", "tsconfig.json"))
+        parsed = parse_claims(render_claims_toml(starters))
+        self.assertEqual(parsed[0].inputs, ("package.json",))
