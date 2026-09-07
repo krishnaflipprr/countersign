@@ -264,6 +264,8 @@ class ClaimInputs(unittest.TestCase):
         self.assertIn("package.json", result.claims_diff[0].detail)
         receipt = receipt_json(result)
         self.assertTrue(any("a file it depends on changed" in s for s in receipt["plain"]), receipt["plain"])
+        self.assertTrue(any("countersign-approved label" in s for s in receipt["plain"]), "the comment tells the maintainer what to do")
+        self.assertFalse(any("countersign-approved label" in s for s in receipt_json(run_gate(config, claims_base="main", approved=True))["plain"]))
         self.assertEqual(receipt["claims"][0]["inputs"]["package.json"], result.claim_results[0].inputs["package.json"])
 
         approved = run_gate(config, claims_base="main", approved=True)
