@@ -26,12 +26,13 @@ and the engine says why. A changed statement or timeout is wording.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .claims import Claim, ClaimsError, parse_claims
+from .claims import Claim, ClaimsError, fingerprint_path, parse_claims
 
 ADDED = "added"
 REMOVED = "removed"
@@ -143,12 +144,16 @@ def diff_claims(base: list[Claim] | None, head: list[Claim] | None, *, command_c
         if before is None or after is None:
             continue  # unreachable: the id came from one of the two sides
         fields = tuple(
-            name for name in ("statement", "command", "expect", "needle", "timeout_s")
+            name for name in ("statement", "command", "expect", "needle", "timeout_s", "inputs")
             if getattr(before, name) != getattr(after, name)
         )
         if not fields:
             continue
         weakened = any(name in WEAKENING_FIELDS for name in fields)
+        # Dropping a declared input takes a file out of the proof: weakening.
+        # Adding one widens it.
+        if "inputs" in fields and set(before.inputs) - set(after.inputs):
+            weakened = True
         # A changed command is a changed proof. By default that is a
         # weakening for a person to approve; the engine does not try to
         # read shell well enough to say otherwise. The no-op check below is
@@ -169,6 +174,76 @@ def diff_claims(base: list[Claim] | None, head: list[Claim] | None, *, command_c
             parts.append("the new command always succeeds, so the claim can no longer fail")
         changes.append(ClaimChange(claim_id, CHANGED, fields, weakened, "; ".join(parts)))
     return changes
+
+
+def input_content_changes(root: Path, ref: str, claims: list[Claim]) -> list[ClaimChange]:
+    """One change per claim whose declared inputs differ between ``ref`` and
+    the working tree. The command may be word for word the same; if the test
+    script it runs was rewritten, the proof changed, and that is a weakening."""
+    changes: list[ClaimChange] = []
+    for claim in claims:
+        if not claim.inputs:
+            continue
+        differing: list[str] = []
+        for relative in claim.inputs:
+            now = fingerprint_path(root, relative)
+            base = _fingerprint_at(root, ref, relative)
+            if now != base:
+                differing.append(f"{relative} ({'absent' if base == 'absent' else base[:12]} to {'absent' if now == 'absent' else now[:12]})")
+        if differing:
+            changes.append(ClaimChange(claim.claim_id, CHANGED, ("inputs",), True, "input changed: " + "; ".join(differing) + "; the command is unchanged but what it runs is not"))
+    return changes
+
+
+def _fingerprint_at(root: Path, ref: str, relative: str) -> str:
+    """The fingerprint a path had at ``ref``: the same function as the working
+    tree's, computed over the committed bytes, so equal content fingerprints equal."""
+    toplevel = _toplevel(root, ref)
+    target = (Path(root).resolve() / relative).resolve()
+    if not target.is_relative_to(toplevel):
+        raise ClaimsError(f"cannot read input at {ref}: {relative} is outside the repository {toplevel}")
+    repo_relative = target.relative_to(toplevel).as_posix()
+    kind = _git_bytes(toplevel, ref, "cat-file", "-t", f"{ref}:{repo_relative}")
+    if kind.returncode != 0:
+        return "absent"
+    if kind.stdout.strip() == b"blob":
+        shown = _git_bytes(toplevel, ref, "show", f"{ref}:{repo_relative}")
+        if shown.returncode != 0:
+            raise ClaimsError(f"cannot read input at {ref}: git show failed for {repo_relative}")
+        return hashlib.sha256(shown.stdout).hexdigest()
+    listed = _git_bytes(toplevel, ref, "ls-tree", "-r", "--name-only", ref, "--", repo_relative)
+    names = [n for n in listed.stdout.decode("utf-8", errors="replace").splitlines() if n.strip()]
+    if listed.returncode != 0:
+        return "absent"
+    digest = hashlib.sha256()
+    prefix = repo_relative.rstrip("/") + "/"
+    for name in sorted(names):
+        shown = _git_bytes(toplevel, ref, "show", f"{ref}:{name}")
+        digest.update(name[len(prefix):].encode("utf-8") + b"\0")
+        digest.update(hashlib.sha256(shown.stdout if shown.returncode == 0 else b"").digest())
+    return digest.hexdigest()
+
+
+def _toplevel(root: Path, ref: str) -> Path:
+    top = _git_bytes(Path(root), ref, "rev-parse", "--show-toplevel")
+    if top.returncode != 0:
+        raise ClaimsError(f"cannot read {ref}: {root} is not inside a git repository")
+    return Path(top.stdout.decode("utf-8", errors="replace").strip()).resolve()
+
+
+def merge_changes(changes: list[ClaimChange], extra: list[ClaimChange]) -> list[ClaimChange]:
+    """Fold input changes into the field diff, one entry per claim."""
+    by_id = {c.claim_id: c for c in changes}
+    for change in extra:
+        existing = by_id.get(change.claim_id)
+        if existing is None or existing.kind != CHANGED:
+            if existing is None:
+                by_id[change.claim_id] = change
+            continue
+        by_id[change.claim_id] = ClaimChange(
+            change.claim_id, CHANGED, tuple(dict.fromkeys(existing.fields + change.fields)), existing.weakened or change.weakened, existing.detail + "; " + change.detail,
+        )
+    return [by_id[k] for k in sorted(by_id)]
 
 
 def diff_against_ref(root: Path, ref: str, claims_file: str, head: list[Claim] | None, *, command_change_weakens: bool = True) -> tuple[list[ClaimChange], str | None]:

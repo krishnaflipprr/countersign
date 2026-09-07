@@ -103,6 +103,10 @@ def plain_sentences(result: GateResult) -> list[str]:
                 parts.append(f"'{change.claim_id}' now expects the opposite outcome")
             elif "needle" in change.fields:
                 parts.append(f"'{change.claim_id}' now looks for a different phrase in the output")
+            elif "inputs" in change.fields and "command" not in change.fields:
+                parts.append(f"'{change.claim_id}' runs the same command but a file it depends on changed")
+            elif "command" in change.fields:
+                parts.append(f"'{change.claim_id}' now runs a different command")
             else:
                 parts.append(f"'{change.claim_id}' was changed")
         sentences.append(f"The claims file was weakened compared with {result.claims_base}: " + "; ".join(parts) + ".")

@@ -27,7 +27,7 @@ inputs:
     required: false
     default: "countersign-approved"
   attest:
-    description: "Sign the receipt JSON with GitHub Artifact Attestations (Sigstore). auto signs public repositories, where it is free on every plan, and skips private ones, which need GitHub Enterprise Cloud; true always signs and fails visibly when it cannot; false never signs. The calling job must grant id-token: write and attestations: write."
+    description: "Sign the receipt JSON with GitHub Artifact Attestations (Sigstore). auto signs public repositories, where it is free on every plan, and skips private ones, which need GitHub Enterprise Cloud; true always signs and fails visibly when it cannot; false never signs. The calling job must grant id-token: write and attestations: write. The attestation proves this workflow produced the receipt; it does not prove that the claim commands, which ran repository code in the same job, could not have influenced it."
     required: false
     default: "auto"
 
@@ -50,6 +50,7 @@ runs:
         COUNTERSIGN_CONFIG: ${{ inputs.config }}
         COUNTERSIGN_FAIL_ON: ${{ inputs.fail-on }}
         COUNTERSIGN_CLAIMS_BASE: ${{ inputs.claims-base }}
+        COUNTERSIGN_RECEIPTS_DIR: ${{ inputs.receipts-dir }}
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         # true when a maintainer added the approval label. Labels can only be
         # added by people with write access, so this is the maintainer's word.
@@ -75,6 +76,14 @@ runs:
         if [ -f "$RUNNER_TEMP/countersign-summary.md" ]; then
           cat "$RUNNER_TEMP/countersign-summary.md" >> "$GITHUB_STEP_SUMMARY"
         fi
+        # Copy the receipts out of the workspace the moment verify ends. The
+        # claim commands ran repository code in this job; a process one of
+        # them left behind could still edit the workspace, but not this copy.
+        # The attestation and the artifact are taken from the copy.
+        rm -rf "$RUNNER_TEMP/countersign-receipts"
+        if [ -d "$COUNTERSIGN_RECEIPTS_DIR" ]; then
+          cp -R "$COUNTERSIGN_RECEIPTS_DIR" "$RUNNER_TEMP/countersign-receipts"
+        fi
         if [ "$status" -ne 0 ] && [ "$COUNTERSIGN_FAIL_ON" != "warn" ]; then
           exit "$status"
         fi
@@ -88,18 +97,20 @@ runs:
       if: inputs.attest == 'true' || (inputs.attest == 'auto' && github.event.repository.private == false)
       uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
       with:
-        subject-path: ${{ inputs.receipts-dir }}/receipts/*.json
+        subject-path: ${{ runner.temp }}/countersign-receipts/receipts/*.json
         predicate-type: https://getcountersign.me/receipt/v1
-        predicate: '{"tool": "countersign"}'
+        # What this attestation proves: that this workflow produced this
+        # receipt file. The claim commands ran repository code in the same
+        # job before the receipt was written, so it does not prove that code
+        # could not have influenced the receipt.
+        predicate: '{"tool": "countersign", "scope": "provenance of the workflow artifact; claim commands ran repository code in this job before the receipt was written"}'
 
     - name: Upload receipts
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: countersign-receipts
-        path: ${{ inputs.receipts-dir }}
-        # The receipts directory is dot-prefixed; upload-artifact skips
-        # hidden paths unless told otherwise.
+        path: ${{ runner.temp }}/countersign-receipts
         include-hidden-files: true
         if-no-files-found: ignore
         retention-days: 90

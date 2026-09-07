@@ -89,6 +89,7 @@ def receipt_json(result: GateResult) -> dict:
                     "duration_ms": c.duration_ms,
                     "output_excerpt": c.output_excerpt,
                     "redactions": c.redactions,
+                    "inputs": dict(c.inputs),
                 }
                 for c in result.claim_results
             ]

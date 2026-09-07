@@ -24,13 +24,14 @@ spawned, so a hung test runner cannot outlive the verdict that recorded it.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import os
 import re
 import signal
 import subprocess
 import time
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +51,7 @@ VALID_EXPECTATIONS = frozenset({"exit 0", "nonzero exit", "output contains"})
 # the claim back to its default judgement (`exit 0`), and the gate would
 # then report a pass for a claim nobody is actually checking. A claims file
 # that cannot be honoured exactly as written is a usage error, not a pass.
-KNOWN_CLAIM_KEYS = frozenset({"id", "statement", "command", "expect", "needle", "timeout_s"})
+KNOWN_CLAIM_KEYS = frozenset({"id", "statement", "command", "expect", "needle", "timeout_s", "inputs"})
 
 # Top-level keys the claims file may carry. Only the claim array today;
 # named here so a stray `[[claims]]` or `[claim]` typo is caught at the door
@@ -71,6 +72,12 @@ class Claim:
     expect: str = "exit 0"
     needle: str | None = None
     timeout_s: int | None = None
+    # Files (or directories) that are part of the proof: the test script in
+    # package.json, the pytest configuration. A command can stay word for
+    # word the same while one of these turns it into a no-op, so on a pull
+    # request each input is fingerprinted against the base and a change is
+    # a weakening like a changed command.
+    inputs: tuple[str, ...] = ()
 
 
 @dataclass
@@ -84,6 +91,8 @@ class ClaimResult:
     duration_ms: int = 0
     output_excerpt: str = ""
     redactions: int = 0
+    # sha256 of each declared input as it was when the claim ran, or "absent".
+    inputs: dict[str, str] = field(default_factory=dict)
 
 
 # Values that must not end up on a receipt. Command output is kept as
@@ -200,6 +209,7 @@ def parse_claims(data: bytes | str, source_name: str = "claims.toml") -> list[Cl
         needle = entry.get("needle")
         if expect == "output contains" and not needle:
             raise ClaimsError(f"claim '{claim_id}' expects 'output contains' but declares no needle")
+        inputs = _parse_inputs(entry.get("inputs"), claim_id)
         timeout_s: int | None = None
         if "timeout_s" in entry:
             raw_timeout = entry["timeout_s"]
@@ -214,9 +224,44 @@ def parse_claims(data: bytes | str, source_name: str = "claims.toml") -> list[Cl
                 expect=expect,
                 needle=str(needle) if needle is not None else None,
                 timeout_s=timeout_s,
+                inputs=inputs,
             )
         )
     return claims
+
+
+def _parse_inputs(raw: Any, claim_id: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+        raise ClaimsError(f"claim '{claim_id}' has inputs that are not a list of paths")
+    out: list[str] = []
+    for item in raw:
+        path = item.strip().replace("\\", "/")
+        if path.startswith("/") or path.startswith("~") or ".." in path.split("/") or ":" in path.split("/")[0] and len(path) > 1 and path[1] == ":":
+            raise ClaimsError(f"claim '{claim_id}' input '{item}' must be a path inside the repository")
+        if path not in out:
+            out.append(path)
+    return tuple(out)
+
+
+def fingerprint_path(root: Path, relative: str) -> str:
+    """sha256 of a file's bytes, or of a directory's files (sorted relative
+    path and content, so a rename or an edit both change it), or "absent"."""
+    target = (Path(root) / relative)
+    if target.is_file():
+        return hashlib.sha256(target.read_bytes()).hexdigest()
+    if target.is_dir():
+        digest = hashlib.sha256()
+        for file in sorted(p for p in target.rglob("*") if p.is_file()):
+            digest.update(file.relative_to(target).as_posix().encode("utf-8") + b"\0")
+            digest.update(hashlib.sha256(file.read_bytes()).digest())
+        return digest.hexdigest()
+    return "absent"
+
+
+def fingerprint_inputs(root: Path, claim: Claim) -> dict[str, str]:
+    return {path: fingerprint_path(root, path) for path in claim.inputs}
 
 
 def missing_claim(claim_id: str) -> ClaimResult:
@@ -312,6 +357,11 @@ def run_claim(claim: Claim, cwd: Path, default_timeout_s: int, max_output_bytes:
         )
 
     duration_ms = int((time.monotonic() - started) * 1000)
+    # The command has exited; anything it left running in its process group
+    # goes with it, so a claim cannot leave a process behind to edit the
+    # receipt after the verdict. (A process that escaped its session is
+    # beyond this; the action copies the receipts out the moment verify ends.)
+    _kill_tree(process)
     combined = _decode(stdout) + _decode(stderr)
     excerpt, redactions = _excerpt(stdout, stderr, max_output_bytes, keep_output)
 

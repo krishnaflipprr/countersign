@@ -73,6 +73,9 @@ on:
   push:
     branches: [{json.dumps(default_branch)}]
   pull_request:
+    # labeled and unlabeled are here so that adding the countersign-approved
+    # label re-runs the gate and the approval takes effect.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 # contents: read is all the checks need. The two write permissions let the
 # action sign the receipt with GitHub Artifact Attestations, which it does
@@ -101,6 +104,8 @@ class StarterClaim:
     statement: str
     command: str
     source: str
+    # The files the command's meaning depends on; fingerprinted on pull requests.
+    inputs: tuple[str, ...] = ()
 
 
 def _package_manager(root: Path) -> str:
@@ -131,12 +136,12 @@ def _node_claims(root: Path) -> list[StarterClaim]:
     test_command = "bun run test" if manager == "bun" else f"{manager} test"
     claims: list[StarterClaim] = []
     if isinstance(scripts.get("test"), str) and scripts["test"].strip():
-        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", test_command, "package.json scripts.test"))
+        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", test_command, "package.json scripts.test", ("package.json",)))
     if isinstance(scripts.get("lint"), str) and scripts["lint"].strip():
-        claims.append(StarterClaim("lint-clean", "The linter reports nothing", f"{run} lint", "package.json scripts.lint"))
+        claims.append(StarterClaim("lint-clean", "The linter reports nothing", f"{run} lint", "package.json scripts.lint", ("package.json",)))
     for name in ("typecheck", "type-check", "tsc"):
         if isinstance(scripts.get(name), str) and scripts[name].strip():
-            claims.append(StarterClaim("types-check", "The type checker reports nothing", f"{run} {name}", f"package.json scripts.{name}"))
+            claims.append(StarterClaim("types-check", "The type checker reports nothing", f"{run} {name}", f"package.json scripts.{name}", ("package.json",)))
             break
     else:
         deps = {}
@@ -144,7 +149,7 @@ def _node_claims(root: Path) -> list[StarterClaim]:
             if isinstance(data.get(key), dict):
                 deps.update(data[key])
         if "typescript" in deps and (root / "tsconfig.json").is_file():
-            claims.append(StarterClaim("types-check", "The type checker reports nothing", "npx tsc --noEmit", "tsconfig.json with typescript installed"))
+            claims.append(StarterClaim("types-check", "The type checker reports nothing", "npx tsc --noEmit", "tsconfig.json with typescript installed", ("package.json", "tsconfig.json")))
     return claims
 
 
@@ -165,35 +170,40 @@ def _python_claims(root: Path) -> list[StarterClaim]:
         or (root / "conftest.py").is_file()
     )
     if pytest_configured:
-        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", "python3 -m pytest -q", "pytest configuration"))
+        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", "python3 -m pytest -q", "pytest configuration", _existing(root, "pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py")))
     elif has_python and ((root / "tests").is_dir() or (root / "test").is_dir()):
         start = "tests" if (root / "tests").is_dir() else "test"
         claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", f"python3 -m unittest discover -s {start} -t .", f"{start}/ directory"))
     if "[tool.ruff" in pyproject_text or (root / "ruff.toml").is_file() or (root / ".ruff.toml").is_file():
-        claims.append(StarterClaim("lint-clean", "The linter reports nothing", "ruff check .", "ruff configuration"))
+        claims.append(StarterClaim("lint-clean", "The linter reports nothing", "ruff check .", "ruff configuration", _existing(root, "pyproject.toml", "ruff.toml", ".ruff.toml")))
     if "[tool.mypy" in pyproject_text or (root / "mypy.ini").is_file():
-        claims.append(StarterClaim("types-check", "The type checker reports nothing", "mypy .", "mypy configuration"))
+        claims.append(StarterClaim("types-check", "The type checker reports nothing", "mypy .", "mypy configuration", _existing(root, "pyproject.toml", "mypy.ini")))
     return claims
+
+
+def _existing(root: Path, *names: str) -> tuple[str, ...]:
+    """The named files that exist, in the order given."""
+    return tuple(name for name in names if (root / name).is_file())
 
 
 def _go_claims(root: Path) -> list[StarterClaim]:
     if not (root / "go.mod").is_file():
         return []
     return [
-        StarterClaim(TESTS_PASS, "The full test suite passes", "go test ./...", "go.mod"),
-        StarterClaim("vet-clean", "go vet reports nothing", "go vet ./...", "go.mod"),
+        StarterClaim(TESTS_PASS, "The full test suite passes", "go test ./...", "go.mod", ("go.mod",)),
+        StarterClaim("vet-clean", "go vet reports nothing", "go vet ./...", "go.mod", ("go.mod",)),
     ]
 
 
 def _rust_claims(root: Path) -> list[StarterClaim]:
     if not (root / "Cargo.toml").is_file():
         return []
-    return [StarterClaim(TESTS_PASS, "The full test suite passes", "cargo test", "Cargo.toml")]
+    return [StarterClaim(TESTS_PASS, "The full test suite passes", "cargo test", "Cargo.toml", ("Cargo.toml",))]
 
 
 def _ruby_claims(root: Path) -> list[StarterClaim]:
     if (root / "Gemfile").is_file() and (root / "spec").is_dir():
-        return [StarterClaim(TESTS_PASS, "The full test suite passes", "bundle exec rspec", "Gemfile with spec/")]
+        return [StarterClaim(TESTS_PASS, "The full test suite passes", "bundle exec rspec", "Gemfile with spec/", ("Gemfile",))]
     return []
 
 
@@ -236,6 +246,7 @@ def render_claims_toml(claims: list[StarterClaim]) -> str:
             '# statement = "The full test suite passes"',
             '# command = "make test"',
             '# expect = "exit 0"',
+            '# inputs = ["Makefile"]        files the command depends on; a change is a weakening on pull requests',
             "",
         ]
     for claim in claims:
@@ -246,6 +257,7 @@ def render_claims_toml(claims: list[StarterClaim]) -> str:
             f"statement = {_toml_string(claim.statement)}",
             f"command = {_toml_string(claim.command)}",
             'expect = "exit 0"',
+            *([f"inputs = [{', '.join(_toml_string(i) for i in claim.inputs)}]"] if claim.inputs else []),
             "",
         ]
     return "\n".join(lines)

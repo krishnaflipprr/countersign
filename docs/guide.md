@@ -93,11 +93,13 @@ A required claim that is not declared is recorded as `MISSING` and fails the gat
 
 A removed claim, a changed expectation or a changed needle is a weakening. So is a command swapped for one that cannot fail (`true`, `:`, `exit 0`, a bare `echo`): nothing can disprove a command that always succeeds, and keeping the claim while pointing it at `true` is cheaper than deleting it. Any other changed command is listed for the reviewer, because the engine cannot know whether `npm test` became stricter or looser.
 
-A claim may carry only `id`, `statement`, `command`, `expect`, `needle` and `timeout_s`. Any other key is refused with exit code 2 and a did-you-mean suggestion, because a misspelled `expct` would otherwise silently drop the claim back to `exit 0` and pass. The same rule applies to `countersign.toml`.
+**Inputs.** `inputs = ["package.json"]` names the files or directories the command depends on. A command can stay identical while the script it runs is rewritten; each input is fingerprinted against the base on pull requests, and a change is a weakening like a changed command. The starter claims declare the obvious build files.
+
+A claim may carry only `id`, `statement`, `command`, `expect`, `needle`, `timeout_s` and `inputs`. Any other key is refused with exit code 2 and a did-you-mean suggestion, because a misspelled `expct` would otherwise silently drop the claim back to `exit 0` and pass. The same rule applies to `countersign.toml`.
 
 **The policy is the base branch's.** Give `verify` a base revision (`--base origin/main`; the GitHub action passes the pull request's exact base commit) and three things happen: the base revision's `countersign.toml` becomes the policy the run enforces, the checkout's `countersign.toml` is diffed against it, and the checkout's `claims.toml` is diffed against the base's. A narrower scan, a dropped required claim, a removed claims file, `fail_on_weakened` turned off, a removed claim, a changed expectation, needle or command: each is a weakening and fails the gate. A changed command counts because the engine does not read shell; `pytest || true` is a command too, and only a person can say whether the new proof proves anything.
 
-**Approval.** A maintainer accepts a weakening by adding the `countersign-approved` label to the pull request; the action passes `--approved` when the label is present. Only people with write access can add labels. The receipt records that the label was used. It never rescues a run that proved nothing: an empty scan is an error and a missing claims file fails, label or not.
+**Approval.** A maintainer accepts a weakening by adding the `countersign-approved` label to the pull request; the action passes `--approved` when the label is present, and the generated workflow listens for label changes so the gate re-runs when the label is added (a hand-written workflow needs `types: [opened, synchronize, reopened, labeled, unlabeled]` on `pull_request`). Only people with write access can add labels. The receipt records that the label was used. It never rescues a run that proved nothing: an empty scan is an error and a missing claims file fails, label or not.
 
 A weakened claim or policy fails the gate unless the base policy sets `fail_on_weakened = false`, in which case it is recorded and the run says so:
 
@@ -144,7 +146,7 @@ steps:
       attest: auto                  # sign receipts of public repositories
 ```
 
-The action runs Countersign straight from its checkout, with no pip install and nothing fetched from PyPI; the actions it uses are pinned to commits. The Markdown summary lands in the job step summary, receipts and packs upload as a `countersign-receipts` artifact, and on pull requests the exact base commit's policy and claims are enforced (section 5). Receipts of public repositories are signed with GitHub Artifact Attestations by default. A pull request can edit this workflow file; protect it with CODEOWNERS, or use the GitHub App, whose check fails on such a pull request until the approval label is added.
+The action runs Countersign straight from its checkout, with no pip install and nothing fetched from PyPI; the actions it uses are pinned to commits. The Markdown summary lands in the job step summary, receipts and packs upload as a `countersign-receipts` artifact, and on pull requests the exact base commit's policy and claims are enforced (section 5). Receipts of public repositories are signed with GitHub Artifact Attestations by default. The signature proves this workflow produced the receipt; because claim commands run repository code in the same job, it does not prove that code could not have influenced the receipt. The receipts are copied out of the workspace the moment verification ends and attested from the copy. A pull request can edit this workflow file; protect it with CODEOWNERS, or use the GitHub App, whose check fails on such a pull request until the approval label is added.
 
 ## 9. Exemptions
 

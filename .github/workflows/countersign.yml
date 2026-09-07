@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # labeled and unlabeled so that adding the countersign-approved label
+    # re-runs the gate and the approval takes effect.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 # The gate job signs its receipt with GitHub Artifact Attestations (this
