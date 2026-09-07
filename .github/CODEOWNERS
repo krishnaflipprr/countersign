@@ -1,0 +1,8 @@
+# The files that define the gate this repository is judged by. With
+# "require review from code owners" enabled on main, a pull request that
+# touches them needs the owner's review before it can merge; the engine's
+# own policy diff catches the content, this catches the workflow around it.
+/.github/workflows/countersign.yml @krishnaflipprr
+/action.yml                        @krishnaflipprr
+/countersign.toml                  @krishnaflipprr
+/claims.toml                       @krishnaflipprr
