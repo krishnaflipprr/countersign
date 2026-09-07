@@ -53,7 +53,7 @@ expect = "output contains"
 needle = "unit_price"
 ```
 
-If nobody can say what command would disprove the claim, the claim was not a claim. Three expectations are supported: `exit 0`, `nonzero exit` (negative tests), and `output contains`. A claim that runs past its timeout is killed together with everything it spawned and recorded as timed out, which fails the gate.
+If nobody can say what command would disprove the claim, the claim was not a claim. Three expectations are supported: `exit 0`, `nonzero exit` (negative tests), and `output contains`. A claim may carry only `id`, `statement`, `command`, `expect`, `needle` and `timeout_s`; any other key is refused with exit code 2 rather than ignored, because a misspelled `expct` would silently drop the claim back to `exit 0` and pass. A claim that runs past its timeout is killed together with everything it spawned and recorded as timed out, which fails the gate.
 
 Claim commands run through your shell, in the repository root, with your privileges. Treat `claims.toml` like any other executable file in the repository: review changes to it the way you review changes to CI configuration.
 
@@ -62,7 +62,7 @@ Claim commands run through your shell, in the repository root, with your privile
 The agent that wrote the code can also write the claims, and the quiet way past a gate is not to fix the code but to soften the claim. Three things make that visible:
 
 - **Required claims.** `required = ["tests-pass"]` in `countersign.toml` names claim ids that must be declared. A required claim nobody wrote is recorded as `MISSING` and fails the gate, so deleting the claim is not a way out.
-- **Claims diff.** `countersign verify --claims-base origin/main` (the GitHub action does this on every pull request) compares `claims.toml` with the base branch and names every change. A removed claim, a changed expectation or a changed needle is a weakening and fails the gate (`fail_on_weakened = true`); a changed command is listed for the reviewer. `countersign claims diff --base origin/main` prints the same diff on its own.
+- **Claims diff.** `countersign verify --claims-base origin/main` (the GitHub action does this on every pull request) compares `claims.toml` with the base branch and names every change. A removed claim, a changed expectation or a changed needle is a weakening and fails the gate (`fail_on_weakened = true`); a command swapped for one that cannot fail (`true`, `:`, a bare `echo`) is a weakening too, since nothing can disprove a command that always exits 0; any other changed command is listed for the reviewer. `countersign claims diff --base origin/main` prints the same diff on its own.
 - **Claims from the agent's own report.** `countersign claims from-report done.md` (or `-` for standard input) turns the checkable sentences of an agent's completion message into proposed claims: "all tests pass" becomes the repository's test command, "created src/pricing.ts" becomes a file check, a URL becomes a request that must succeed. The agent's own sentence is kept as the statement, so the receipt later says which promise held. Deterministic English patterns; a sentence whose command cannot be derived from the repository is reported as unresolved, never guessed. `--write` appends them to `claims.toml`.
 - **Starter claims.** `countersign init` reads the build files that are actually there (package.json scripts, pytest or ruff configuration, go.mod, Cargo.toml) and writes a `claims.toml` with the stack's own test, lint and type-check commands, marking `tests-pass` as required. Nothing is guessed; a repository with no recognised build files gets a commented example.
 
@@ -74,7 +74,7 @@ Point `paths` at production source (the original gate covered `src/`, the dashbo
 
 ## Receipts, register, reproduce
 
-- Every run appends to `.countersign/register.jsonl`: an append-only, hash-chained log. Edit any earlier line and `countersign check` says so. Appends are locked, so two runs on one checkout cannot break the chain by racing.
+- Every run appends to `.countersign/register.jsonl`: an append-only, hash-chained log. Edit any earlier line and `countersign check` says so. `check` prints the head hash; pin it somewhere the machine does not control and pass it back as `countersign check --expect-head <hash>` to catch entries dropped from the end, which a hash chain alone cannot show. Appends are locked, so two runs on one checkout cannot break the chain by racing.
 - What the register proves, exactly: that no entry was altered after it was written by anyone who did not also rewrite every entry after it. It lives on the machine that ran the checks, so on its own it is evidence against accident and against third parties, not against the machine's owner. Tamper evidence against the owner requires the register head to be anchored outside the machine, which is what a hosted anchoring service is for.
 - Every run writes a JSON receipt and, unless asked not to, a single-file HTML evidence pack: what was checked, how, what was found, what was not covered. The pack and the Markdown summary open with the result in plain words, written for the person who asked the agent for the feature rather than for the engineer reading the tables. Receipts name the git commit and say whether the working tree had uncommitted changes when it was scanned.
 - `countersign reproduce --run <id>` re-derives a recorded run from the same inputs and compares, result for result. The run recorded the SHA-256 of the config and claims files it read; if they changed, you are told.
@@ -87,7 +87,8 @@ Exit codes: 0 countersigned or reproduced, 1 not countersigned (or the register 
 pip install countersign-cli
 countersign init         # writes countersign.toml, a starter claims.toml and, on GitHub, the workflow
 countersign verify       # scan + claims gate; writes receipt, pack, register
-countersign check        # the register's hash chain
+countersign check        # the register's hash chain, and its head hash
+countersign check --expect-head <hash>
 countersign reproduce --run <id>
 countersign claims diff --base origin/main
 ```

@@ -14,13 +14,17 @@ What counts as weakened, deterministically:
   expect changed       the judgement rule changed
   needle changed       what the output must contain changed
 
-A changed command is reported as changed and left to the reviewer: the
-engine cannot know whether ``npm test`` became stricter or looser. A
-changed statement or timeout is reported as wording.
+  command neutered    the command was doing work and now always exits 0
+
+A changed command is otherwise reported as changed and left to the
+reviewer: the engine cannot know whether ``npm test`` became stricter or
+looser. It can know that ``true`` checks nothing, and says so. A changed
+statement or timeout is reported as wording.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +36,30 @@ REMOVED = "removed"
 CHANGED = "changed"
 
 WEAKENING_FIELDS = ("expect", "needle")
+
+# Commands that cannot fail, and so cannot disprove anything. Swapping a
+# real command for one of these is the cheapest way past the gate: cheaper
+# than deleting the claim, which is already caught as a removal. The claim
+# survives the diff looking untouched while checking nothing at all.
+#
+# Only exact, unambiguous no-ops are listed, case-sensitively: `TRUE` is
+# not a command on Linux and fails, so it is not a no-op. A command the
+# engine cannot read confidently stays a plain `changed` for the reviewer,
+# because the engine genuinely cannot know whether `npm test` became stricter.
+_NO_OP_COMMANDS = frozenset({
+    "true", ":", "/bin/true", "/usr/bin/true",
+    "exit 0", "return 0",
+})
+# A bare `echo ...` (no pipe, no redirect, no chaining) always exits 0.
+_ECHO_ONLY = re.compile(r"^(?:/bin/)?echo\b[^|&;<>()`$]*$")
+
+
+def is_no_op_command(command: str) -> bool:
+    """True when the command always succeeds and so tests nothing."""
+    stripped = command.strip().rstrip(";").strip()
+    if stripped in _NO_OP_COMMANDS:
+        return True
+    return bool(_ECHO_ONLY.match(stripped))
 
 
 @dataclass(frozen=True)
@@ -109,9 +137,22 @@ def diff_claims(base: list[Claim] | None, head: list[Claim] | None) -> list[Clai
         if not fields:
             continue
         weakened = any(name in WEAKENING_FIELDS for name in fields)
+        # A command that was doing work and now cannot fail is a weakening
+        # even though the engine stays agnostic about command changes in
+        # general: this one is decidable without judging the command's
+        # meaning, because nothing can disprove a command that always exits 0.
+        neutered = (
+            "command" in fields
+            and not is_no_op_command(before.command)
+            and is_no_op_command(after.command)
+        )
+        if neutered:
+            weakened = True
         parts = []
         for name in fields:
             parts.append(f"{name}: {getattr(before, name)!r} to {getattr(after, name)!r}")
+        if neutered:
+            parts.append("the new command always succeeds, so the claim can no longer fail")
         changes.append(ClaimChange(claim_id, CHANGED, fields, weakened, "; ".join(parts)))
     return changes
 

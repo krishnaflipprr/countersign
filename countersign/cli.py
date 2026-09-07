@@ -242,8 +242,40 @@ def _cmd_check(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"the evidence register cannot be read: {exc}", file=sys.stderr)
         return EXIT_FAIL
+    # The head hash is what makes truncation detectable. A hash chain proves
+    # no entry was altered in place, but dropping whole entries off the end
+    # leaves a shorter chain that is still internally consistent. Printing
+    # the head lets a caller pin it somewhere the machine being audited does
+    # not control, and compare it on the next run.
+    head_hash: str | None = None
+    if intact:
+        try:
+            head = register.head()
+            head_hash = head["hash"] if head else None
+        except RegisterDamaged as exc:
+            print(f"{config.register_path()}: {exc}", file=sys.stderr)
+            return EXIT_FAIL
     print(f"{config.register_path()}: {note}")
-    return EXIT_OK if intact else EXIT_FAIL
+    if head_hash:
+        print(f"  head: {head_hash}")
+    elif intact:
+        print("  head: (empty register)")
+    if not intact:
+        return EXIT_FAIL
+    expected = getattr(args, "expect_head", None)
+    if expected:
+        actual = head_hash or ""
+        if expected != actual:
+            print(
+                f"the register head is {actual or '(empty)'}, not the expected {expected}. "
+                "The chain is internally consistent, so entries were not altered in place; "
+                "either runs were appended since the head was pinned, or entries were removed "
+                "from the end.",
+                file=sys.stderr,
+            )
+            return EXIT_FAIL
+        print("  head matches the expected value")
+    return EXIT_OK
 
 
 def _cmd_reproduce(args: argparse.Namespace) -> int:
@@ -374,6 +406,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_check = sub.add_parser("check", help="verify the evidence register's hash chain")
     p_check.add_argument("--config", default="countersign.toml", help="config path (default: countersign.toml)")
+    p_check.add_argument(
+        "--expect-head",
+        metavar="HASH",
+        help="fail unless the register's head hash equals HASH; pin this value outside the machine "
+             "to detect entries removed from the end of the chain",
+    )
     p_check.set_defaults(func=_cmd_check)
 
     p_repro = sub.add_parser("reproduce", help="re-derive a recorded run and compare")

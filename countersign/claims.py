@@ -23,6 +23,7 @@ spawned, so a hung test runner cannot outlive the verdict that recorded it.
 
 from __future__ import annotations
 
+import difflib
 import os
 import signal
 import subprocess
@@ -42,6 +43,18 @@ MISSING = "missing"
 NOT_PASSED = frozenset({FAIL, TIMEOUT, MISSING})
 
 VALID_EXPECTATIONS = frozenset({"exit 0", "nonzero exit", "output contains"})
+
+# Every key a [[claim]] block may carry. A key outside this set is refused
+# rather than ignored: a misspelled `expct` or `neddle` would silently drop
+# the claim back to its default judgement (`exit 0`), and the gate would
+# then report a pass for a claim nobody is actually checking. A claims file
+# that cannot be honoured exactly as written is a usage error, not a pass.
+KNOWN_CLAIM_KEYS = frozenset({"id", "statement", "command", "expect", "needle", "timeout_s"})
+
+# Top-level keys the claims file may carry. Only the claim array today;
+# named here so a stray `[[claims]]` or `[claim]` typo is caught at the door
+# instead of parsing as zero claims and passing the gate in silence.
+KNOWN_CLAIMS_FILE_KEYS = frozenset({"claim"})
 
 # How long to wait for a killed command's pipes to drain before giving up
 # on collecting its output. A grandchild that escaped its process group can
@@ -75,6 +88,29 @@ class ClaimsError(ValueError):
     """The claims file exists but cannot be honoured as written."""
 
 
+def _did_you_mean(unknown: str, known: frozenset[str]) -> str:
+    """A ' (did you mean X?)' suffix when one known key is close enough.
+
+    Deterministic: difflib's ratio on a fixed cutoff over a sorted list, so
+    the same typo always produces the same message on every machine.
+    """
+    close = difflib.get_close_matches(unknown, sorted(known), n=1, cutoff=0.6)
+    return f" (did you mean '{close[0]}'?)" if close else ""
+
+
+def _refuse_unknown_keys(entry: dict[str, Any], known: frozenset[str], where: str) -> None:
+    """Raise on any key outside ``known``, naming all of them at once."""
+    unknown = sorted(set(entry) - known)
+    if not unknown:
+        return
+    listed = ", ".join(f"'{key}'{_did_you_mean(key, known)}" for key in unknown)
+    raise ClaimsError(
+        f"{where} declares {listed}, which Countersign does not understand. "
+        f"Known keys are {sorted(known)}. An unrecognised key is refused rather "
+        "than ignored, because ignoring it would quietly change what the claim checks."
+    )
+
+
 def load_claims(path: Path | None) -> list[Claim] | None:
     """Parse claims.toml. None means no file (a reported skip, not silence)."""
     if path is None:
@@ -99,6 +135,7 @@ def parse_claims(data: bytes | str, source_name: str = "claims.toml") -> list[Cl
         raw = tomllib.loads(data)
     except tomllib.TOMLDecodeError as exc:
         raise ClaimsError(f"{source_name} is not valid TOML: {exc}") from None
+    _refuse_unknown_keys(raw, KNOWN_CLAIMS_FILE_KEYS, source_name)
     declared: Any = raw.get("claim", [])
     if not isinstance(declared, list) or not all(isinstance(entry, dict) for entry in declared):
         raise ClaimsError("claims must be declared as an array of tables: one [[claim]] block per claim")
@@ -111,6 +148,7 @@ def parse_claims(data: bytes | str, source_name: str = "claims.toml") -> list[Cl
         if claim_id in seen:
             raise ClaimsError(f"claim id '{claim_id}' is declared twice")
         seen.add(claim_id)
+        _refuse_unknown_keys(entry, KNOWN_CLAIM_KEYS, f"claim '{claim_id}'")
         statement = str(entry.get("statement", "")).strip()
         if not statement:
             raise ClaimsError(f"claim '{claim_id}' has no statement")

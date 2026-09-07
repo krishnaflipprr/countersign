@@ -37,3 +37,16 @@ id = "register-chain-intact"
 statement = "This repository's own evidence register verifies end to end"
 command = "python3 -m countersign check"
 expect = "exit 0"
+
+[[claim]]
+id = "unknown-claim-keys-refused"
+statement = "A claims file with a misspelled key is refused instead of silently passing"
+command = "python3 -c \"from countersign.claims import parse_claims; parse_claims('[[claim]]\\nid = \\\"x\\\"\\nstatement = \\\"s\\\"\\ncommand = \\\"true\\\"\\nexpct = \\\"exit 0\\\"\\n')\""
+expect = "nonzero exit"
+
+[[claim]]
+id = "no-op-command-is-weakening"
+statement = "Swapping a real claim command for one that cannot fail is reported as a weakening"
+command = "python3 -c \"from countersign.claims import parse_claims as p; from countersign.claimsdiff import diff_claims as d; c = d(p('[[claim]]\\nid = \\\"t\\\"\\nstatement = \\\"s\\\"\\ncommand = \\\"npm test\\\"\\n'), p('[[claim]]\\nid = \\\"t\\\"\\nstatement = \\\"s\\\"\\ncommand = \\\"true\\\"\\n')); raise SystemExit(0 if c and c[0].weakened else 1)\""
+expect = "exit 0"
+

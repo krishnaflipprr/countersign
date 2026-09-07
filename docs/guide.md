@@ -91,7 +91,9 @@ A required claim that is not declared is recorded as `MISSING` and fails the gat
 
 ![countersign claims diff](images/claims-diff.png)
 
-A removed claim, a changed expectation or a changed needle is a weakening. A changed command is listed for the reviewer, because the engine cannot know whether `npm test` became stricter or looser.
+A removed claim, a changed expectation or a changed needle is a weakening. So is a command swapped for one that cannot fail (`true`, `:`, `exit 0`, a bare `echo`): nothing can disprove a command that always succeeds, and keeping the claim while pointing it at `true` is cheaper than deleting it. Any other changed command is listed for the reviewer, because the engine cannot know whether `npm test` became stricter or looser.
+
+A claim may carry only `id`, `statement`, `command`, `expect`, `needle` and `timeout_s`. Any other key is refused with exit code 2 and a did-you-mean suggestion, because a misspelled `expct` would otherwise silently drop the claim back to `exit 0` and pass.
 
 Give `verify` the base revision and the diff becomes part of the run, the receipt and the pack. A weakened claim fails the gate unless the config sets `fail_on_weakened = false`, in which case it is recorded and the run says so:
 
@@ -101,7 +103,7 @@ The GitHub action does this on every pull request against the pull request's bas
 
 ## 6. The register
 
-Every check, finding and claim verdict is one line of JSON in `.countersign/register.jsonl`. Each line carries the SHA-256 of the line before it. `countersign check` recomputes the whole chain:
+Every check, finding and claim verdict is one line of JSON in `.countersign/register.jsonl`. Each line carries the SHA-256 of the line before it. `countersign check` recomputes the whole chain and prints the head hash. A chain proves nothing was altered in place; it cannot show entries dropped from the end. Pin the head somewhere the machine does not control and pass it back with `countersign check --expect-head <hash>` to catch that too:
 
 ![countersign check](images/check.png)
 
