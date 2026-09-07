@@ -93,7 +93,7 @@ A required claim that is not declared is recorded as `MISSING` and fails the gat
 
 A removed claim, a changed expectation or a changed needle is a weakening. So is a command swapped for one that cannot fail (`true`, `:`, `exit 0`, a bare `echo`): nothing can disprove a command that always succeeds, and keeping the claim while pointing it at `true` is cheaper than deleting it. Any other changed command is listed for the reviewer, because the engine cannot know whether `npm test` became stricter or looser.
 
-**Inputs.** `inputs = ["package.json"]` names the files or directories the command depends on. A command can stay identical while the script it runs is rewritten; each input is fingerprinted against the base on pull requests, and a change is a weakening like a changed command. The starter claims declare the obvious build files.
+**Inputs.** `inputs = ["package.json", "vitest.config.*"]` names the files, directories or patterns the command depends on. A command can stay identical while the script it runs is rewritten, or while a new config file narrows what the runner discovers; each input is fingerprinted against the base on pull requests, an absent input has a fingerprint too, and a change is a weakening like a changed command. The starter claims declare each stack's runner-control files whether or not they exist yet.
 
 A claim may carry only `id`, `statement`, `command`, `expect`, `needle`, `timeout_s` and `inputs`. Any other key is refused with exit code 2 and a did-you-mean suggestion, because a misspelled `expct` would otherwise silently drop the claim back to `exit 0` and pass. The same rule applies to `countersign.toml`.
 

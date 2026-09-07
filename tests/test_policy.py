@@ -318,9 +318,42 @@ class ClaimInputs(unittest.TestCase):
         from countersign.claims import parse_claims
         (self.root / "tsconfig.json").write_text("{}", encoding="utf-8")
         (self.root / "package.json").write_text('{"scripts": {"test": "vitest run", "lint": "eslint ."}, "devDependencies": {"typescript": "5"}}', encoding="utf-8")
+        from countersign.starter import NODE_TEST_INPUTS, NODE_TYPES_INPUTS
         starters = detect_starter_claims(self.root)
         by_id = {s.claim_id: s.inputs for s in starters}
-        self.assertEqual(by_id["tests-pass"], ("package.json",))
-        self.assertEqual(by_id["types-check"], ("package.json", "tsconfig.json"))
+        self.assertEqual(by_id["tests-pass"], NODE_TEST_INPUTS)
+        self.assertEqual(by_id["types-check"], NODE_TYPES_INPUTS)
+        self.assertIn("vitest.config.*", by_id["tests-pass"], "declared whether or not it exists, so adding one is a change")
         parsed = parse_claims(render_claims_toml(starters))
-        self.assertEqual(parsed[0].inputs, ("package.json",))
+        self.assertEqual(parsed[0].inputs, NODE_TEST_INPUTS)
+
+    def test_adding_a_runner_config_file_is_a_weakening(self) -> None:
+        """The command and every existing input stay the same; a new file that
+        narrows discovery appears. Absent on the base is a fingerprint too."""
+        from countersign.claims import fingerprint_path
+        config = Config.load(self.root / "countersign.toml")
+        (self.root / "claims.toml").write_text('[[claim]]\nid = "tests-pass"\nstatement = "The suite passes"\ncommand = "python3 -c \'print(1)\'"\ninputs = ["package.json", "vitest.config.*", "pytest.ini"]\n', encoding="utf-8")
+        subprocess.run([*GIT, "commit", "-q", "-am", "declare runner-control inputs that do not exist yet"], cwd=self.root, check=True, capture_output=True)
+        self.assertEqual(fingerprint_path(self.root, "vitest.config.*"), "absent")
+        clean = run_gate(config, claims_base="main")
+        self.assertEqual(clean.verdict, PASS_VERDICT)
+        self.assertEqual(clean.claims_diff, [])
+        self.assertEqual(clean.claim_results[0].inputs["pytest.ini"], "absent")
+
+        (self.root / "vitest.config.ts").write_text("export default { test: { include: [] } }\n", encoding="utf-8")
+        added = run_gate(config, claims_base="main")
+        self.assertEqual(added.verdict, FAIL_VERDICT)
+        self.assertIn("vitest.config.*", added.claims_diff[0].detail)
+        (self.root / "vitest.config.ts").unlink()
+
+        (self.root / "pytest.ini").write_text("[pytest]\ntestpaths = nowhere\n", encoding="utf-8")
+        added = run_gate(config, claims_base="main")
+        self.assertEqual(added.verdict, FAIL_VERDICT)
+        self.assertIn("pytest.ini (absent to", added.claims_diff[0].detail)
+
+    def test_patterns_stay_within_one_directory_level(self) -> None:
+        from countersign.claims import path_matches
+        self.assertTrue(path_matches("vitest.config.ts", "vitest.config.*"))
+        self.assertFalse(path_matches("packages/web/vitest.config.ts", "vitest.config.*"))
+        self.assertTrue(path_matches("packages/web/vitest.config.ts", "packages/*/vitest.config.*"))
+        self.assertTrue(path_matches("tsconfig.build.json", "tsconfig.*.json"))

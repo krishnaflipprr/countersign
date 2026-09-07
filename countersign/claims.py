@@ -24,6 +24,7 @@ spawned, so a hung test runner cannot outlive the verdict that recorded it.
 from __future__ import annotations
 
 import difflib
+import fnmatch
 import hashlib
 import os
 import re
@@ -245,18 +246,59 @@ def _parse_inputs(raw: Any, claim_id: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def is_pattern(relative: str) -> bool:
+    return any(ch in relative for ch in "*?[")
+
+
+def _pattern_matches(root: Path, pattern: str) -> list[Path]:
+    """Files under ``root`` whose repository-relative path matches ``pattern``
+    (fnmatch rules; ``*`` does not cross a directory separator). The .git
+    directory is never an input."""
+    root = Path(root)
+    matches: list[Path] = []
+    for file in root.rglob("*"):
+        if not file.is_file():
+            continue
+        relative = file.relative_to(root).as_posix()
+        if relative.split("/", 1)[0] == ".git":
+            continue
+        if path_matches(relative, pattern):
+            matches.append(file)
+    return sorted(matches)
+
+
+def path_matches(relative: str, pattern: str) -> bool:
+    """fnmatch where ``*`` and ``?`` stay within one path segment, so
+    ``vitest.config.*`` names files at the root and ``**/`` is not needed for
+    the common case."""
+    return fnmatch.fnmatchcase(relative, pattern) and relative.count("/") == pattern.count("/")
+
+
+def fingerprint_files(entries: list[tuple[str, bytes]]) -> str:
+    """One fingerprint over several files: sorted relative path and content,
+    so an added, removed, renamed or edited file all change it."""
+    digest = hashlib.sha256()
+    for relative, content in sorted(entries):
+        digest.update(relative.encode("utf-8") + b"\0")
+        digest.update(hashlib.sha256(content).digest())
+    return digest.hexdigest()
+
+
 def fingerprint_path(root: Path, relative: str) -> str:
-    """sha256 of a file's bytes, or of a directory's files (sorted relative
-    path and content, so a rename or an edit both change it), or "absent"."""
+    """sha256 of a file's bytes; of a directory's files or a pattern's matches
+    (sorted relative path and content, so a rename or an edit both change it);
+    or "absent" when nothing is there. An absent input is a real fingerprint:
+    a pull request that creates the file changes it."""
+    if is_pattern(relative):
+        matches = _pattern_matches(root, relative)
+        if not matches:
+            return "absent"
+        return fingerprint_files([(m.relative_to(Path(root)).as_posix(), m.read_bytes()) for m in matches])
     target = (Path(root) / relative)
     if target.is_file():
         return hashlib.sha256(target.read_bytes()).hexdigest()
     if target.is_dir():
-        digest = hashlib.sha256()
-        for file in sorted(p for p in target.rglob("*") if p.is_file()):
-            digest.update(file.relative_to(target).as_posix().encode("utf-8") + b"\0")
-            digest.update(hashlib.sha256(file.read_bytes()).digest())
-        return digest.hexdigest()
+        return fingerprint_files([(f.relative_to(target).as_posix(), f.read_bytes()) for f in target.rglob("*") if f.is_file()])
     return "absent"
 
 

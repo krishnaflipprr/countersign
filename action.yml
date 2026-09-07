@@ -81,9 +81,14 @@ runs:
         # them left behind could still edit the workspace, but not this copy.
         # The attestation and the artifact are taken from the copy.
         rm -rf "$RUNNER_TEMP/countersign-receipts"
+        receipts=false
         if [ -d "$COUNTERSIGN_RECEIPTS_DIR" ]; then
           cp -R "$COUNTERSIGN_RECEIPTS_DIR" "$RUNNER_TEMP/countersign-receipts"
+          if ls "$RUNNER_TEMP/countersign-receipts/receipts/"*.json >/dev/null 2>&1; then receipts=true; fi
         fi
+        # A negative verdict is a receipt too, and the one an auditor asks for;
+        # the attestation step keys on this rather than on the exit status.
+        echo "receipts=$receipts" >> "$GITHUB_OUTPUT"
         if [ "$status" -ne 0 ] && [ "$COUNTERSIGN_FAIL_ON" != "warn" ]; then
           exit "$status"
         fi
@@ -94,7 +99,9 @@ runs:
         fi
 
     - name: Attest the receipt
-      if: inputs.attest == 'true' || (inputs.attest == 'auto' && github.event.repository.private == false)
+      # always(): a not-countersigned verdict fails the verify step, and that
+      # receipt is signed like any other. No receipt (a usage error) skips it.
+      if: always() && steps.countersign.outputs.receipts == 'true' && (inputs.attest == 'true' || (inputs.attest == 'auto' && github.event.repository.private == false))
       uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
       with:
         subject-path: ${{ runner.temp }}/countersign-receipts/receipts/*.json

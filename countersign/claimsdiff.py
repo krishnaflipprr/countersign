@@ -32,7 +32,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .claims import Claim, ClaimsError, fingerprint_path, parse_claims
+from .claims import Claim, ClaimsError, fingerprint_files, fingerprint_path, is_pattern, parse_claims, path_matches
 
 ADDED = "added"
 REMOVED = "removed"
@@ -199,6 +199,21 @@ def _fingerprint_at(root: Path, ref: str, relative: str) -> str:
     """The fingerprint a path had at ``ref``: the same function as the working
     tree's, computed over the committed bytes, so equal content fingerprints equal."""
     toplevel = _toplevel(root, ref)
+    root_relative = Path(root).resolve().relative_to(toplevel).as_posix()
+    if is_pattern(relative):
+        listed = _git_bytes(toplevel, ref, "ls-tree", "-r", "--name-only", ref)
+        if listed.returncode != 0:
+            return "absent"
+        prefix = "" if root_relative in ("", ".") else root_relative + "/"
+        entries: list[tuple[str, bytes]] = []
+        for name in listed.stdout.decode("utf-8", errors="replace").splitlines():
+            if not name.startswith(prefix):
+                continue
+            under_root = name[len(prefix):]
+            if path_matches(under_root, relative):
+                shown = _git_bytes(toplevel, ref, "show", f"{ref}:{name}")
+                entries.append((under_root, shown.stdout if shown.returncode == 0 else b""))
+        return fingerprint_files(entries) if entries else "absent"
     target = (Path(root).resolve() / relative).resolve()
     if not target.is_relative_to(toplevel):
         raise ClaimsError(f"cannot read input at {ref}: {relative} is outside the repository {toplevel}")
@@ -215,13 +230,12 @@ def _fingerprint_at(root: Path, ref: str, relative: str) -> str:
     names = [n for n in listed.stdout.decode("utf-8", errors="replace").splitlines() if n.strip()]
     if listed.returncode != 0:
         return "absent"
-    digest = hashlib.sha256()
     prefix = repo_relative.rstrip("/") + "/"
-    for name in sorted(names):
+    entries = []
+    for name in names:
         shown = _git_bytes(toplevel, ref, "show", f"{ref}:{name}")
-        digest.update(name[len(prefix):].encode("utf-8") + b"\0")
-        digest.update(hashlib.sha256(shown.stdout if shown.returncode == 0 else b"").digest())
-    return digest.hexdigest()
+        entries.append((name[len(prefix):], shown.stdout if shown.returncode == 0 else b""))
+    return fingerprint_files(entries)
 
 
 def _toplevel(root: Path, ref: str) -> Path:

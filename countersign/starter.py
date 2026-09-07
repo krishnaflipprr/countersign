@@ -136,12 +136,12 @@ def _node_claims(root: Path) -> list[StarterClaim]:
     test_command = "bun run test" if manager == "bun" else f"{manager} test"
     claims: list[StarterClaim] = []
     if isinstance(scripts.get("test"), str) and scripts["test"].strip():
-        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", test_command, "package.json scripts.test", ("package.json",)))
+        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", test_command, "package.json scripts.test", NODE_TEST_INPUTS))
     if isinstance(scripts.get("lint"), str) and scripts["lint"].strip():
-        claims.append(StarterClaim("lint-clean", "The linter reports nothing", f"{run} lint", "package.json scripts.lint", ("package.json",)))
+        claims.append(StarterClaim("lint-clean", "The linter reports nothing", f"{run} lint", "package.json scripts.lint", NODE_LINT_INPUTS))
     for name in ("typecheck", "type-check", "tsc"):
         if isinstance(scripts.get(name), str) and scripts[name].strip():
-            claims.append(StarterClaim("types-check", "The type checker reports nothing", f"{run} {name}", f"package.json scripts.{name}", ("package.json",)))
+            claims.append(StarterClaim("types-check", "The type checker reports nothing", f"{run} {name}", f"package.json scripts.{name}", NODE_TYPES_INPUTS))
             break
     else:
         deps = {}
@@ -149,7 +149,7 @@ def _node_claims(root: Path) -> list[StarterClaim]:
             if isinstance(data.get(key), dict):
                 deps.update(data[key])
         if "typescript" in deps and (root / "tsconfig.json").is_file():
-            claims.append(StarterClaim("types-check", "The type checker reports nothing", "npx tsc --noEmit", "tsconfig.json with typescript installed", ("package.json", "tsconfig.json")))
+            claims.append(StarterClaim("types-check", "The type checker reports nothing", "npx tsc --noEmit", "tsconfig.json with typescript installed", NODE_TYPES_INPUTS))
     return claims
 
 
@@ -170,40 +170,51 @@ def _python_claims(root: Path) -> list[StarterClaim]:
         or (root / "conftest.py").is_file()
     )
     if pytest_configured:
-        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", "python3 -m pytest -q", "pytest configuration", _existing(root, "pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py")))
+        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", "python3 -m pytest -q", "pytest configuration", PYTEST_INPUTS))
     elif has_python and ((root / "tests").is_dir() or (root / "test").is_dir()):
         start = "tests" if (root / "tests").is_dir() else "test"
-        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", f"python3 -m unittest discover -s {start} -t .", f"{start}/ directory"))
+        claims.append(StarterClaim(TESTS_PASS, "The full test suite passes", f"python3 -m unittest discover -s {start} -t .", f"{start}/ directory", UNITTEST_INPUTS))
     if "[tool.ruff" in pyproject_text or (root / "ruff.toml").is_file() or (root / ".ruff.toml").is_file():
-        claims.append(StarterClaim("lint-clean", "The linter reports nothing", "ruff check .", "ruff configuration", _existing(root, "pyproject.toml", "ruff.toml", ".ruff.toml")))
+        claims.append(StarterClaim("lint-clean", "The linter reports nothing", "ruff check .", "ruff configuration", RUFF_INPUTS))
     if "[tool.mypy" in pyproject_text or (root / "mypy.ini").is_file():
-        claims.append(StarterClaim("types-check", "The type checker reports nothing", "mypy .", "mypy configuration", _existing(root, "pyproject.toml", "mypy.ini")))
+        claims.append(StarterClaim("types-check", "The type checker reports nothing", "mypy .", "mypy configuration", MYPY_INPUTS))
     return claims
 
 
-def _existing(root: Path, *names: str) -> tuple[str, ...]:
-    """The named files that exist, in the order given."""
-    return tuple(name for name in names if (root / name).is_file())
+# The files and patterns that control what each runner discovers and runs.
+# Declared whether or not they exist: an absent input has a fingerprint
+# too, so a pull request that adds a pytest.ini or a vitest.config.ts that
+# narrows discovery changes the proof and is a weakening.
+NODE_TEST_INPUTS = ("package.json", "vitest.config.*", "vitest.workspace.*", "vite.config.*", "jest.config.*", ".mocharc.*", "playwright.config.*")
+NODE_LINT_INPUTS = ("package.json", "eslint.config.*", ".eslintrc.*", ".eslintrc", ".eslintignore", "biome.json", "biome.jsonc")
+NODE_TYPES_INPUTS = ("package.json", "tsconfig.json", "tsconfig.*.json")
+PYTEST_INPUTS = ("pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "conftest.py")
+UNITTEST_INPUTS = ("pyproject.toml",)
+RUFF_INPUTS = ("pyproject.toml", "ruff.toml", ".ruff.toml")
+MYPY_INPUTS = ("pyproject.toml", "mypy.ini", "setup.cfg")
+GO_INPUTS = ("go.mod",)
+RUST_INPUTS = ("Cargo.toml", ".cargo/config.toml")
+RUBY_INPUTS = ("Gemfile", ".rspec")
 
 
 def _go_claims(root: Path) -> list[StarterClaim]:
     if not (root / "go.mod").is_file():
         return []
     return [
-        StarterClaim(TESTS_PASS, "The full test suite passes", "go test ./...", "go.mod", ("go.mod",)),
-        StarterClaim("vet-clean", "go vet reports nothing", "go vet ./...", "go.mod", ("go.mod",)),
+        StarterClaim(TESTS_PASS, "The full test suite passes", "go test ./...", "go.mod", GO_INPUTS),
+        StarterClaim("vet-clean", "go vet reports nothing", "go vet ./...", "go.mod", GO_INPUTS),
     ]
 
 
 def _rust_claims(root: Path) -> list[StarterClaim]:
     if not (root / "Cargo.toml").is_file():
         return []
-    return [StarterClaim(TESTS_PASS, "The full test suite passes", "cargo test", "Cargo.toml", ("Cargo.toml",))]
+    return [StarterClaim(TESTS_PASS, "The full test suite passes", "cargo test", "Cargo.toml", RUST_INPUTS)]
 
 
 def _ruby_claims(root: Path) -> list[StarterClaim]:
     if (root / "Gemfile").is_file() and (root / "spec").is_dir():
-        return [StarterClaim(TESTS_PASS, "The full test suite passes", "bundle exec rspec", "Gemfile with spec/", ("Gemfile",))]
+        return [StarterClaim(TESTS_PASS, "The full test suite passes", "bundle exec rspec", "Gemfile with spec/", RUBY_INPUTS)]
     return []
 
 
