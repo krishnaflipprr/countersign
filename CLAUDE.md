@@ -76,6 +76,16 @@ end to end, no markers, and it runs.
 - Repository public since 2026-09-05; the engine is published in full.
 - Hosted at github.com/krishnaflipprr/countersign (decided 2026-09-03).
 
+## Working on this repository (since 2026-09-07)
+
+`main` is protected: every change arrives by pull request, needs one
+approving review from a code owner (CODEOWNERS names Krishna's account),
+must pass the five CI checks, and admins are not exempt. An author cannot
+approve their own pull request and both Krishna and Claude act as
+`krishnaflipprr`, so Claude pushes branches and opens pull requests as
+`gaigenticai` (a collaborator with write access) and Krishna approves and
+merges as `krishnaflipprr`. Never push to `main` directly; it is refused.
+
 ## Releasing
 
 The workflow that `countersign init` writes points customers at
