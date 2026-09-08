@@ -24,6 +24,14 @@ ACTION_REF = "krishnaflipprr/countersign@v0.3"
 # Third-party actions are pinned to the commit behind the tag. The tag is
 # kept as a comment so Dependabot can move both together.
 CHECKOUT_REF = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1"
+SETUP_PYTHON_REF = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0"
+SETUP_NODE_REF = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0"
+SETUP_BUN_REF = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0"
+SETUP_GO_REF = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0"
+SETUP_RUBY_REF = "ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b  # v1.321.0"
+# The Python the action itself runs on. The workflow sets up the same one
+# before installing anything, so what pip installs is what the claims see.
+ACTION_PYTHON = "3.12"
 WORKFLOW_RELATIVE_PATH = Path(".github") / "workflows" / "countersign.yml"
 
 
@@ -64,7 +72,72 @@ def detect_github_repository(root: Path) -> GitHubRepository | None:
     return GitHubRepository(Path(toplevel).resolve(), branch or "main")
 
 
-def render_workflow(config_path_in_repo: str, default_branch: str) -> str:
+def detect_setup(root: Path) -> list[str]:
+    """The workflow steps that install what the starter claims need, one
+    YAML list item per entry, unindented. A claim like ``python3 -m pytest``
+    cannot hold on a runner where pytest was never installed; the setup
+    steps are derived from the same files the claims are, so the workflow
+    works on the first push."""
+    root = Path(root)
+    steps: list[str] = []
+
+    package_json = root / "package.json"
+    if package_json.is_file():
+        manager = _package_manager(root)
+        if manager == "bun":
+            steps.append(f"- uses: {SETUP_BUN_REF}")
+            steps.append("- run: bun install")
+        else:
+            steps.append(f"- uses: {SETUP_NODE_REF}\n  with:\n    node-version: \"22\"")
+            if manager == "pnpm":
+                steps.append("- run: corepack enable && pnpm install --frozen-lockfile")
+            elif manager == "yarn":
+                steps.append("- run: corepack enable && yarn install --frozen-lockfile")
+            elif (root / "package-lock.json").is_file():
+                steps.append("- run: npm ci")
+            else:
+                steps.append("- run: npm install")
+
+    pyproject_text = ""
+    if (root / "pyproject.toml").is_file():
+        try:
+            pyproject_text = (root / "pyproject.toml").read_text(encoding="utf-8-sig")
+        except OSError:
+            pyproject_text = ""
+    python_claims = [c for c in _python_claims(root)]
+    has_python = bool(pyproject_text) or any((root / name).is_file() for name in ("setup.py", "setup.cfg", "requirements.txt"))
+    if has_python or python_claims:
+        steps.append(f"- uses: {SETUP_PYTHON_REF}\n  with:\n    python-version: \"{ACTION_PYTHON}\"")
+        installs: list[str] = []
+        if (root / "requirements.txt").is_file():
+            installs.append("python -m pip install -r requirements.txt")
+        if "[project]" in pyproject_text or "[build-system]" in pyproject_text or (root / "setup.py").is_file():
+            installs.append("python -m pip install -e .")
+        tools = []
+        for claim in python_claims:
+            if claim.command.startswith("python3 -m pytest"):
+                tools.append("pytest")
+            elif claim.command.startswith("ruff "):
+                tools.append("ruff")
+            elif claim.command.startswith("mypy "):
+                tools.append("mypy")
+        if tools:
+            installs.append("python -m pip install " + " ".join(tools))
+        if installs:
+            steps.append("- run: |\n    " + "\n    ".join(installs))
+
+    if (root / "go.mod").is_file():
+        steps.append(f"- uses: {SETUP_GO_REF}\n  with:\n    go-version-file: go.mod")
+    if (root / "Gemfile").is_file():
+        steps.append(f"- uses: {SETUP_RUBY_REF}\n  with:\n    bundler-cache: true")
+    return steps
+
+
+def render_workflow(config_path_in_repo: str, default_branch: str, setup: list[str] | tuple[str, ...] = ()) -> str:
+    setup_block = ""
+    if setup:
+        indented = "\n".join("      " + line if line else line for step in setup for line in step.split("\n"))
+        setup_block = "      # Installs what the starter claims need. Edit freely; the claims in\n      # claims.toml are what the gate enforces, these steps only make them runnable.\n" + indented + "\n"
     return f"""# Countersign: verifies every push to {default_branch} and every pull request.
 # Written by `countersign init`. Safe to edit; the action's inputs are
 # documented at https://github.com/{ACTION_REF.split('@')[0]}.
@@ -92,7 +165,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: {CHECKOUT_REF}
-      - uses: {ACTION_REF}
+{setup_block}      - uses: {ACTION_REF}
         with:
           config: {json.dumps(config_path_in_repo)}
 """

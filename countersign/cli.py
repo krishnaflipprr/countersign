@@ -34,7 +34,7 @@ from .claimsdiff import diff_against_ref
 from .register import Register, RegisterDamaged
 from .reportclaims import claims_from_report, render_proposals_toml, without_ids
 from .reproduce import reproduce_run
-from .starter import WORKFLOW_RELATIVE_PATH, detect_github_repository, detect_starter_claims, render_claims_toml, render_workflow
+from .starter import WORKFLOW_RELATIVE_PATH, detect_github_repository, detect_setup, detect_starter_claims, render_claims_toml, render_workflow
 
 EXIT_OK = 0
 EXIT_FAIL = 1
@@ -173,7 +173,7 @@ def _write_workflow(root: Path, config_target: Path, args: argparse.Namespace) -
         return None
     config_in_repo = config_target.resolve().relative_to(repository.toplevel).as_posix()
     workflow_path.parent.mkdir(parents=True, exist_ok=True)
-    workflow_path.write_text(render_workflow(config_in_repo, repository.default_branch), encoding="utf-8")
+    workflow_path.write_text(render_workflow(config_in_repo, repository.default_branch, detect_setup(root)), encoding="utf-8")
     print(f"wrote {workflow_path}")
     print(f"  runs countersign verify on every push to {repository.default_branch} and every pull request; commit it and push")
     return None

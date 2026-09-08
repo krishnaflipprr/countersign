@@ -160,6 +160,24 @@ class TestStubScan(unittest.TestCase):
                 findings, _exemptions, _inert, _files = self._scan_single(name, content)
                 self.assertEqual([f.rule_id for f in findings if f.rule_id in ("placeholder-macro", "not-implemented-raised")], [])
 
+    def test_not_implemented_inside_abstract_methods_is_the_interface(self):
+        source = (
+            "from abc import ABC, abstractmethod\n"
+            "from typing import Protocol\n\n"
+            "class Adapter(ABC):\n"
+            "    @abstractmethod\n"
+            "    def send(self, payload: dict) -> None:\n"
+            "        raise NotImplementedError\n\n"
+            "class Reader(Protocol):\n"
+            "    def read(self) -> bytes:\n"
+            "        raise NotImplementedError('implement me')\n\n"
+            "class Concrete(Adapter):\n"
+            "    def send(self, payload: dict) -> None:\n"
+            "        raise NotImplementedError\n"
+        )
+        findings, _exemptions, _inert, _files = self._scan_single("adapters.py", source)
+        self.assertEqual([(f.line, f.rule_id) for f in findings], [(15, "not-implemented-error")], "only the concrete class's raise is unfinished work")
+
     def test_finds_coming_soon_in_typescript(self):
         findings, _exemptions, _inert, _files = scan_tree(self.config)
         self.assertTrue(any(f.rule_id == "coming-soon" and f.path == "src/banner.ts" for f in findings))

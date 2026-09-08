@@ -127,7 +127,7 @@ If the files changed, you are told which. If the findings differ, you are told w
 
 ## 8. Continuous integration
 
-If the repository's origin is on github.com, `countersign init` already wrote `.github/workflows/countersign.yml` for you (it says so in its output; `--no-github` skips it, `--github` insists). Commit and push it. Otherwise, add this step to a workflow of your own:
+If the repository's origin is on github.com, `countersign init` already wrote `.github/workflows/countersign.yml` for you (it says so in its output; `--no-github` skips it, `--github` insists). The workflow sets up the stack it recognised and installs what the starter claims need: `npm ci` (or pnpm, yarn, bun), `pip install` of your requirements and the test runner on the same Python the action uses, Go from go.mod, Ruby with bundler. Edit those steps freely; the claims are what the gate enforces. Commit and push it. Otherwise, add this step to a workflow of your own:
 
 ```yaml
 permissions:
