@@ -162,3 +162,43 @@ class TestInit(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkflowSetupSteps(unittest.TestCase):
+    """The generated workflow installs what the starter claims need, so the first push can hold."""
+
+    def _steps(self, files: dict[str, str]) -> str:
+        from countersign.starter import detect_setup, render_workflow
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, content in files.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(content, encoding="utf-8")
+            return render_workflow("countersign.toml", "main", detect_setup(root))
+
+    def test_python_with_pytest_installs_the_project_and_pytest_on_the_same_interpreter(self) -> None:
+        text = self._steps({"pyproject.toml": "[project]\nname = \"x\"\n[tool.pytest.ini_options]\n", "requirements.txt": "requests\n"})
+        self.assertIn("actions/setup-python@", text)
+        self.assertIn('python-version: "3.12"', text)
+        self.assertIn("python -m pip install -r requirements.txt", text)
+        self.assertIn("python -m pip install -e .", text)
+        self.assertIn("python -m pip install pytest", text)
+        self.assertLess(text.index("setup-python"), text.index("krishnaflipprr/countersign@"))
+
+    def test_node_managers(self) -> None:
+        npm = self._steps({"package.json": '{"scripts": {"test": "vitest run"}}', "package-lock.json": "{}"})
+        self.assertIn("actions/setup-node@", npm)
+        self.assertIn("- run: npm ci", npm)
+        pnpm = self._steps({"package.json": '{"scripts": {"test": "vitest run"}}', "pnpm-lock.yaml": ""})
+        self.assertIn("pnpm install --frozen-lockfile", pnpm)
+        bun = self._steps({"package.json": '{"scripts": {"test": "vitest run"}}', "bun.lock": ""})
+        self.assertIn("oven-sh/setup-bun@", bun)
+        self.assertIn("- run: bun install", bun)
+
+    def test_go_ruby_and_nothing(self) -> None:
+        self.assertIn("go-version-file: go.mod", self._steps({"go.mod": "module x\n"}))
+        self.assertIn("bundler-cache: true", self._steps({"Gemfile": "", "spec/a_spec.rb": ""}))
+        bare = self._steps({})
+        self.assertNotIn("Installs what the starter claims need", bare)
+        self.assertIn("- uses: actions/checkout@", bare)
+

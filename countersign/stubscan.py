@@ -182,6 +182,28 @@ def _python_empty_functions(source: str, exempt_marker: str = "") -> list[tuple[
     return reported
 
 
+ABSTRACT_RAISE_RULES = frozenset({"not-implemented-error", "not-implemented-raised"})
+
+
+def _python_abstract_lines(source: str) -> set[int]:
+    """Line numbers inside functions that are declared abstract (decorated
+    ``abstractmethod``, or methods of a Protocol). Raising the not-implemented
+    exception there is the interface itself, not work left undone, and the
+    two not-implemented rules do not fire on those lines."""
+    tree = ast.parse(source)
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if "abstractmethod" in _decorator_names(node) or _inside_protocol(node, parents):
+            lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    return lines
+
+
 def _is_structural_js_target(path: Path) -> bool:
     """Declaration files carry no bodies; minified files carry polyfill noise."""
     name = path.name
@@ -201,6 +223,12 @@ def scan_file(config: Config, relative: str, absolute: Path) -> tuple[list[Findi
     exempt_lines: set[int] = set()
     used_exemptions: set[int] = set()
     lines = _LINE_BREAK.split(text)
+    abstract_lines: set[int] = set()
+    if absolute.suffix == ".py":
+        try:
+            abstract_lines = _python_abstract_lines(text)
+        except (SyntaxError, ValueError):
+            abstract_lines = set()  # reported below as unparseable
 
     for number, line in enumerate(lines, start=1):
         exempt = config.exempt_marker in line
@@ -208,6 +236,8 @@ def scan_file(config: Config, relative: str, absolute: Path) -> tuple[list[Findi
             exempt_lines.add(number)
         for rule in RULES:
             if rule.pattern.search(line):
+                if rule.rule_id in ABSTRACT_RAISE_RULES and number in abstract_lines:
+                    continue
                 if exempt:
                     used_exemptions.add(number)
                 else:

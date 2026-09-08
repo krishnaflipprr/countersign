@@ -29,7 +29,7 @@ The verdict is either **countersigned** or **not countersigned**, and the receip
 ## Use it without a terminal: the GitHub App
 
 1. Open [github.com/apps/countersignapp](https://github.com/apps/countersignapp) and click Install. Pick the repositories.
-2. Within a few seconds Countersign opens a pull request in each repository titled "Add Countersign: verify every change, in plain words". It adds three small files and nothing else: the workflow, a configuration, and starter claims read from what is already in the repository (the test script in package.json, a pytest configuration, go.mod, Cargo.toml).
+2. Within a few seconds Countersign opens a pull request in each repository titled "Add Countersign: verify every change, in plain words". It adds three small files and nothing else: the workflow, a configuration, and starter claims read from what is already in the repository (the test script in package.json, a pytest configuration, go.mod, Cargo.toml). The workflow also installs what those claims need to run (your dependencies, and the test runner the claim names) for the stack it recognised, so the first push can hold.
 3. Merge that pull request.
 4. From then on, every push and pull request gets:
    - a check named `countersign` on the commit,
@@ -166,7 +166,7 @@ Thirteen rules, eleven of them ported from a gate that ran daily on a production
 |---|---|
 | a note left for later instead of finished work | TODO, FIXME, XXX or HACK |
 | code that declares itself unfinished | "not yet implemented", "not implemented yet" |
-| code that raises an error instead of doing the work | raise or throw NotImplementedError |
+| code that raises an error instead of doing the work | raise or throw NotImplementedError, except inside a Python method declared abstract or on a Protocol, where it is the interface |
 | code that says the work will be done another time | "implemented later", "implemented in a future" |
 | code marked as a stand-in | the word stub or stubbed |
 | made-up data standing in for a real result | fake, dummy, mock, sample, placeholder or hardcoded data, value, response, result or payload |
